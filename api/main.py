@@ -4,10 +4,11 @@ from fastapi import FastAPI
 import firebase_admin
 from firebase_admin import credentials, firestore, auth
 from dotenv import load_dotenv
+from api.users.routes import router as users_router
 
 load_dotenv()
 
-app = FastAPI()
+app = FastAPI(title="Face Quiz Backend", version="1.0.0")
 
 # Initialize Firebase
 try:
@@ -18,12 +19,9 @@ except ValueError:
 
 db = firestore.client()
 
+# Include routers
+app.include_router(users_router)
+
 @app.get("/")
 async def root():
     return {"message": "This is Face Quiz Backend!"}
-
-@app.get("/api/users/")
-async def get_users():
-    users_ref = db.collection("users").stream()
-    users = [user.to_dict() for user in users_ref]
-    return users
