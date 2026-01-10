@@ -117,11 +117,13 @@ async def get_user_exams(username: str):
     """Get user's accessed exams"""
     try:
         db = get_db()
-        user_doc = db.collection("users").document(username).get()
-        if not user_doc.exists:
+        user_query = db.collection("users").where("username", "==", username).stream()
+        users = list(user_query)
+        
+        if not users:
             raise HTTPException(status_code=404, detail="User not found")
         
-        user_data = user_doc.to_dict()
+        user_data = users[0].to_dict()
         return user_data.get("acessedExams", [])
     except HTTPException:
         raise
