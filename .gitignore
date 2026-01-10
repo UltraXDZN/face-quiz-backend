@@ -4,3 +4,5 @@ __pycache__/
 *.pyo
 *$py.class
 .pytest_cache/
+.env
+serviceAccountKey.json

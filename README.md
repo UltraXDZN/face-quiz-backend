@@ -2,6 +2,19 @@
 
 Ovo je backend za FIPU FaceQuiz aplikaciju
 
+## Postavljanje Firebase-a:
+
+Prije nego što se aplikacija upali potrebno je napraviti svoju `.env` datoteku te `serviceAccountKey.json` ključ.
+
+`.env` datoteku možete ispuniti tako da:
+1. napravite kopiju `.env_example` i preimenujete je u `.env`
+2. ispunite novonapravljenu datoteku podacima iz *Firebase Console* > *Project Settings* > ***General***
+
+`serviceAccountKey.json` je **Privatni ključ** koji omogućuje **APSOLUTNI** pristup firebase aplikaciji:
+1. Odite na *Firebase Console* > *Project Settings* > ***Service Accounts***
+2. Kliknite na ***Generate new private key***
+3. Spremite ključ pod naziv `serviceAccountKey.json` (**UPOZORENJE**: Ovaj ključ nesmije ići na javni repozitorij!)
+
 ## Pokretanje projekta lokalno
 
 Za lokalno izvođenje i pokretanje aplikacije, iduće naredbe pokrenite iz terminala/command prompta
