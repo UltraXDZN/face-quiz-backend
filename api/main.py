@@ -2,6 +2,7 @@ import os
 import uvicorn
 import firebase_admin
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 from api.users.routes import router as users_router
 from firebase_admin import credentials, firestore, auth
@@ -43,6 +44,16 @@ except Exception as e:
     import traceback
     traceback.print_exc()
     raise
+
+# Add CORS middleware to allow frontend access in development
+allowed_origins = ["http://localhost:3000"]
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=allowed_origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # Include routers
 app.include_router(users_router)
