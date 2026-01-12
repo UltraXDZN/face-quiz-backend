@@ -1,5 +1,7 @@
+import os
 from fastapi import APIRouter, HTTPException, status
-from firebase_admin import firestore, auth
+from google.cloud import firestore
+from google.auth.credentials import AnonymousCredentials
 from models.users import User, UserCreate, UserUpdate
 from typing import List
 
@@ -8,7 +10,16 @@ router = APIRouter(prefix="/api/users", tags=["users"])
 
 def get_db():
     """Get Firestore client"""
-    return firestore.client()
+    # For emulator, use AnonymousCredentials
+    if os.getenv("FIRESTORE_EMULATOR_HOST"):
+        return firestore.Client(
+            project=os.getenv("FIREBASE_TESTING_PROJECT_ID", "demo-test"),
+            credentials=AnonymousCredentials()
+        )
+    else:
+        # For production, use firebase_admin
+        from firebase_admin import firestore as admin_firestore
+        return admin_firestore.client()
 
 
 @router.get("/", response_model=List[User])
