@@ -35,3 +35,17 @@ Pokrenite sljedeću naredbu kako biste podignuli lokalni server
 ```bash
 uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload
 ```
+
+## Korištenje API-a
+
+Svi implementirani API pozivi su testabilni na sljedećem *Postman* linku: https://www.postman.com/ultrax-6527639/workspace/facequizapi
+
+### Users
+
+| API poziv                                 | Opis                          |
+| ----------------------------------------- | ----------------------------- |
+| `GET {{API_URL}}/api/users/`              | Lista svih korisnika          |
+| `POST {{API_URL}}/api/users/`             | Stvori korisnika              |
+| `GET {{API_URL}}/api/users/<username>`    | Dohvati specifičnog korisnika |
+| `PATCH {{API_URL}}/api/users/<username>`  | Ažuriranje specifičnog korisnika |
+| `DELETE {{API_URL}}/api/users/<username>` | Brisanje specifičnog korisnika |
