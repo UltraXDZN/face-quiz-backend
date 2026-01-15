@@ -4,7 +4,8 @@ from google.cloud import firestore
 from google.auth.credentials import AnonymousCredentials
 from models.users import User, UserCreate, UserUpdate
 from typing import List
-
+# Import leaderboard update helper
+from api.leaderboard.routes import update_user_leaderboard_entry
 router = APIRouter(prefix="/api/users", tags=["users"])
 
 
@@ -166,6 +167,10 @@ async def update_user_accessed_exam(username: str, accessed_exam: dict, old_exam
         
         # Update document
         db.collection("users").document(user_doc.id).update({"acessedExams": accessed_exams})
+        
+        # Automatically update leaderboard if exam is finished
+        if accessed_exam.get("status") == "ZAVRŠEN":
+            await update_user_leaderboard_entry(user_doc.id)
         
         return {"message": "Accessed exam updated successfully", "acessedExams": accessed_exams}
     except HTTPException:
