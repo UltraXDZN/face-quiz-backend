@@ -106,16 +106,16 @@ async def update_leaderboard(request: LeaderboardUpdateRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-async def update_user_leaderboard_entry(user_email: str):
+async def update_user_leaderboard_entry(username: str):
     """
     Helper function to recalculate and update a user's leaderboard entry.
-    Called automatically after exam completion.
+    Called automatically after exam completion or profile picture change.
     """
     try:
         db = get_db()
         
-        # Get user data
-        user_doc = db.collection("users").document(user_email).get()
+        # Get user data by username (document ID)
+        user_doc = db.collection("users").document(username).get()
         if not user_doc.exists:
             return
         
@@ -153,4 +153,4 @@ async def update_user_leaderboard_entry(user_email: str):
         leaderboard_doc.set({"leaderboard": leaderboard_map})
         
     except Exception as e:
-        print(f"Error updating leaderboard for user {user_email}: {str(e)}")
+        print(f"Error updating leaderboard for user {username}: {str(e)}")

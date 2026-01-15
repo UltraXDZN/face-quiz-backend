@@ -99,7 +99,16 @@ async def update_user(username: str, user_update: UserUpdate):
         
         # Return updated user
         updated_user = db.collection("users").document(user_doc.id).get()
-        return updated_user.to_dict()
+        user_data = updated_user.to_dict()
+        
+        # If photoURL was updated, update leaderboard entry
+        if user_update.photoURL is not None:
+            try:
+                await update_user_leaderboard_entry(username)
+            except Exception as e:
+                print(f"Failed to update leaderboard for user {username}: {e}")
+        
+        return user_data
     except HTTPException:
         raise
     except Exception as e:
