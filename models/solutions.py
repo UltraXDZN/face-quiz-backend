@@ -17,8 +17,8 @@ class SolutionSubmission(BaseModel):
 class UserSolutionResponse(BaseModel):
     email: str
     username: str
-    firstName: str
-    lastName: str
+    name: str
+    surname: str
     percent: int
     creationYear: int
     admin: bool

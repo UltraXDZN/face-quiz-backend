@@ -47,8 +47,7 @@ async def get_users_with_scores(exam_id: str, password: str, exam_info: ExamInfo
         db = get_db()
         
         # Get all solutions for this exam
-        solutions_ref = db.collection("solutions").document(exam_id)\
-                         .collection(password).stream()
+        solutions_ref = db.collection("solutions").document(exam_id).collection(password).stream()
         
         solutions_list = list(solutions_ref)
         print(f"DEBUG: Found {len(solutions_list)} solutions for exam {exam_id}/{password}")
@@ -78,20 +77,22 @@ async def get_users_with_scores(exam_id: str, password: str, exam_info: ExamInfo
             percent = round((correct_count / total_tasks) * 100) if total_tasks > 0 else 0
             
             # Get user data
-            user_doc = db.collection("users").document(email).get()
+            username = email.split("@")[0]
+            user_doc = db.collection("users").document(username).get()
             if user_doc.exists:
                 user_data = user_doc.to_dict()
-                users_with_scores.append({
-                    "email": email,
-                    "username": user_data.get("username", ""),
-                    "firstName": user_data.get("firstName", ""),
-                    "lastName": user_data.get("lastName", ""),
-                    "percent": percent,
-                    "creationYear": user_data.get("creationYear", 0),
-                    "admin": user_data.get("admin", False)
-                })
             else:
+                user_data = {}
                 print(f"DEBUG: User {email} not found in users collection")
+            users_with_scores.append({
+                "email": email,
+                "username": user_data.get("username", ""),
+                "name": user_data.get("name", ""),
+                "surname": user_data.get("surname", ""),
+                "percent": percent,
+                "creationYear": user_data.get("creationYear", 0),
+                "admin": user_data.get("admin", False)
+            })
         
         print(f"DEBUG: Returning {len(users_with_scores)} users with scores")
         return users_with_scores
