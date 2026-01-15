@@ -49,3 +49,20 @@ Svi implementirani API pozivi su testabilni na sljedećem *Postman* linku: https
 | `GET {{API_URL}}/api/users/<username>`    | Dohvati specifičnog korisnika |
 | `PATCH {{API_URL}}/api/users/<username>`  | Ažuriranje specifičnog korisnika |
 | `DELETE {{API_URL}}/api/users/<username>` | Brisanje specifičnog korisnika |
+
+### Exams
+
+| API poziv                                 | Opis                          |
+| ----------------------------------------- | ----------------------------- |
+| `POST {{API_URL}}/api/exams`              | Stvori Exam                   |
+| `GET {{API_URL}}/api/exams/data`          | Dohvati podatke o examu       |
+| `GET {{API_URL}}/api/users/<username>`    | Dohvati specifičnog korisnika |
+| `PATCH {{API_URL}}/api/users/<username>`  | Ažuriranje specifičnog korisnika |
+| `DELETE {{API_URL}}/api/users/<username>` | Brisanje specifičnog korisnika |
+
+POST /api/exams - Create exam
+GET /api/exams/data - Get all exams metadata
+GET /api/exams/{exam_id} - Get specific exam
+PUT /api/exams/{exam_id} - Update exam
+DELETE /api/exams/{exam_id} - Delete exam
+POST /api/exams/{exam_id}/password - Set exam password

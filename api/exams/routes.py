@@ -61,6 +61,11 @@ async def create_exam(exam: Exam):
             title=exam.title,
             creator=exam.creator,
             timestamp=exam.timestamp,
+            password=exam.password,
+            accessLimit=exam.accessLimit,
+            timeLimit=exam.timeLimit,
+            startLimit=exam.startLimit,
+            endLimit=exam.endLimit,
             version=0
         )
         
@@ -105,9 +110,22 @@ async def get_exams_data():
             return ExamsDataResponse(createdExams=[], examPasswords={})
         
         data = data_doc.to_dict()
+        
+        # Convert DatetimeWithNanoseconds to integer timestamps
+        exam_passwords = data.get("examPasswords", {})
+        converted_passwords = {}
+        for exam_id, passwords in exam_passwords.items():
+            converted_passwords[exam_id] = {}
+            for password, timestamp in passwords.items():
+                # Convert Firestore timestamp to milliseconds
+                if hasattr(timestamp, 'timestamp'):
+                    converted_passwords[exam_id][password] = int(timestamp.timestamp() * 1000)
+                else:
+                    converted_passwords[exam_id][password] = timestamp
+        
         return ExamsDataResponse(
             createdExams=data.get("createdExams", []),
-            examPasswords=data.get("examPasswords", {})
+            examPasswords=converted_passwords
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -172,6 +190,11 @@ async def update_exam(exam_id: str, exam: Exam):
             title=exam.title,
             creator=exam.creator,
             timestamp=exam.timestamp,
+            password=exam.password,
+            accessLimit=exam.accessLimit,
+            timeLimit=exam.timeLimit,
+            startLimit=exam.startLimit,
+            endLimit=exam.endLimit,
             version=old_short_exam.get("version", 0) + 1
         )
         
