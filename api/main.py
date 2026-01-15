@@ -16,6 +16,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from firebase_admin import credentials
 from api.users.routes import router as users_router
 from api.solutions.routes import router as solutions_router
+from api.exams.routes import router as exams_router
 
 app = FastAPI(title="Face Quiz Backend", version="1.0.0")
 
@@ -45,6 +46,7 @@ app.add_middleware(
 # Include routers
 app.include_router(users_router)
 app.include_router(solutions_router)
+app.include_router(exams_router)
 
 @app.get("/")
 async def root():
