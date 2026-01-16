@@ -4,6 +4,8 @@ anyio==4.12.1
 click==8.3.1
 fastapi==0.128.0
 firebase-admin==6.5.0
+httpx==0.28.1
+pyjwt==2.10.1
 h11==0.16.0
 idna==3.11
 pydantic==2.12.5
