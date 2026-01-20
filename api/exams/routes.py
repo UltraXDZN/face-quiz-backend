@@ -11,7 +11,7 @@ router = APIRouter(prefix="/api/exams", tags=["exams"])
 def get_db():
     """Get Firestore client"""
     # For emulator, use AnonymousCredentials
-    if os.getenv("FIRESTORE_EMULATOR_HOST"):
+    if os.getenv("ENVIRONMENT") != "production":
         return firestore.Client(
             project=os.getenv("FIREBASE_TESTING_PROJECT_ID", "demo-test"),
             credentials=AnonymousCredentials()
