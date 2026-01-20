@@ -72,8 +72,9 @@ else:
     })
     print(f"🔥 Using Firebase Emulator: {os.environ.get('FIRESTORE_EMULATOR_HOST')}")
 
-# Add CORS middleware to allow frontend access in development
-allowed_origins = ["http://localhost:3000"]
+# Add CORS middleware to allow frontend access
+allowed_origins = [os.environ.get("FRONTEND_URL", "http://localhost:3000")]
+print(f"Allowed CORS origins: {allowed_origins}")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=allowed_origins,
