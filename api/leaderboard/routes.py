@@ -10,7 +10,7 @@ router = APIRouter(prefix="/api/leaderboard", tags=["leaderboard"])
 
 def get_db():
     """Get Firestore client"""
-    if os.getenv("FIRESTORE_EMULATOR_HOST"):
+    if os.getenv("ENVIRONMENT") != "production":
         return firestore.Client(
             project=os.getenv("FIREBASE_TESTING_PROJECT_ID", "demo-test"),
             credentials=AnonymousCredentials()
@@ -31,8 +31,33 @@ async def get_leaderboard():
             return LeaderboardData(leaderboard={})
         
         data = leaderboard_doc.to_dict()
-        return LeaderboardData(leaderboard=data.get("leaderboard", {}))
+        raw_leaderboard = data.get("leaderboard", {})
+        
+        # Validate and clean the data
+        cleaned_leaderboard = {}
+        for key, value in raw_leaderboard.items():
+            try:
+                # Ensure totalPoints is a number
+                total_points = value.get("totalPoints", 0)
+                if isinstance(total_points, str):
+                    # Try to parse string to float, default to 0 if fails
+                    try:
+                        total_points = float(total_points)
+                    except (ValueError, TypeError):
+                        print(f"Invalid totalPoints for {key}: {total_points}, defaulting to 0")
+                        total_points = 0
+                
+                cleaned_leaderboard[key] = LeaderboardEntry(
+                    totalPoints=total_points,
+                    img=value.get("img")
+                )
+            except Exception as e:
+                print(f"Error processing leaderboard entry {key}: {e}")
+                continue
+        
+        return LeaderboardData(leaderboard=cleaned_leaderboard)
     except Exception as e:
+        print(f"Error getting leaderboard: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

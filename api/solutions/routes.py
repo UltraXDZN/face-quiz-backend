@@ -11,7 +11,7 @@ router = APIRouter(prefix="/api/solutions", tags=["solutions"])
 def get_db():
     """Get Firestore client"""
     # For emulator, use AnonymousCredentials
-    if os.getenv("FIRESTORE_EMULATOR_HOST"):
+    if os.getenv("ENVIRONMENT") != "production":
         return firestore.Client(
             project=os.getenv("FIREBASE_TESTING_PROJECT_ID", "demo-test"),
             credentials=AnonymousCredentials()
@@ -76,9 +76,8 @@ async def get_users_with_scores(exam_id: str, password: str, exam_info: ExamInfo
             
             percent = round((correct_count / total_tasks) * 100) if total_tasks > 0 else 0
             
-            # Get user data
-            username = email.split("@")[0]
-            user_doc = db.collection("users").document(username).get()
+            # Get user data by email (document ID)
+            user_doc = db.collection("users").document(email).get()
             if user_doc.exists:
                 user_data = user_doc.to_dict()
             else:

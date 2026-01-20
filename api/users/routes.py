@@ -12,7 +12,8 @@ router = APIRouter(prefix="/api/users", tags=["users"])
 def get_db():
     """Get Firestore client"""
     # For emulator, use AnonymousCredentials
-    if os.getenv("FIRESTORE_EMULATOR_HOST"):
+    if os.getenv("ENVIRONMENT") != "production":
+        print("🔥 Using Firestore Emulator Client for users")
         return firestore.Client(
             project=os.getenv("FIREBASE_TESTING_PROJECT_ID", "demo-test"),
             credentials=AnonymousCredentials()
@@ -20,6 +21,7 @@ def get_db():
     else:
         # For production, use firebase_admin
         from firebase_admin import firestore as admin_firestore
+        print("🔥 Using Firestore Admin Client for users")
         return admin_firestore.client()
 
 
@@ -35,21 +37,38 @@ async def get_all_users():
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/{username}", response_model=User)
-async def get_user(username: str):
-    """Get user by username"""
+@router.get("/{email}", response_model=User)
+async def get_user(email: str):
+    """Get user by email"""
     try:
         db = get_db()
-        user_query = db.collection("users").where("username", "==", username).stream()
+        print(f"🔍 Looking for user: {email}")
+        
+        # Try to get document directly by email first (if email is used as doc ID)
+        try:
+            user_doc = db.collection("users").document(email).get()
+            if user_doc.exists:
+                print(f"✅ Found user by document ID: {email}")
+                return user_doc.to_dict()
+        except Exception as doc_error:
+            print(f"⚠️ Could not get by document ID: {doc_error}")
+        
+        # Fall back to query by email field
+        user_query = db.collection("users").where("email", "==", email).stream()
         users = list(user_query)
         
         if not users:
+            print(f"❌ User not found: {email}")
             raise HTTPException(status_code=404, detail="User not found")
         
+        print(f"✅ Found user by query: {email}")
         return users[0].to_dict()
     except HTTPException:
         raise
     except Exception as e:
+        print(f"❌ Error getting user '{email}': {e}")
+        import traceback
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -80,19 +99,22 @@ async def create_user(user: UserCreate):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.patch("/{username}", response_model=User)
-async def update_user(username: str, user_update: UserUpdate):
+@router.patch("/{email}", response_model=User)
+async def update_user(email: str, user_update: UserUpdate):
     """Update user information"""
     try:
         db = get_db()
-        # Check if user exists
-        user_query = db.collection("users").where("username", "==", username).stream()
-        users = list(user_query)
+        # Check if user exists - try document ID first, then query
+        user_doc = db.collection("users").document(email).get()
         
-        if not users:
-            raise HTTPException(status_code=404, detail="User not found")
+        if not user_doc.exists:
+            # Try querying by email field
+            user_query = db.collection("users").where("email", "==", email).stream()
+            users = list(user_query)
+            if not users:
+                raise HTTPException(status_code=404, detail="User not found")
+            user_doc = users[0]
         
-        user_doc = users[0]
         # Update only provided fields
         update_data = {k: v for k, v in user_update.dict().items() if v is not None}
         db.collection("users").document(user_doc.id).update(update_data)
@@ -104,9 +126,9 @@ async def update_user(username: str, user_update: UserUpdate):
         # If photoURL was updated, update leaderboard entry
         if user_update.photoURL is not None:
             try:
-                await update_user_leaderboard_entry(username)
+                await update_user_leaderboard_entry(email)
             except Exception as e:
-                print(f"Failed to update leaderboard for user {username}: {e}")
+                print(f"Failed to update leaderboard for user {email}: {e}")
         
         return user_data
     except HTTPException:
@@ -115,17 +137,17 @@ async def update_user(username: str, user_update: UserUpdate):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.delete("/{username}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_user(username: str):
+@router.delete("/{email}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_user(email: str):
     """Delete a user"""
     try:
         db = get_db()
         # Check if user exists
-        user_doc = db.collection("users").document(username).get()
+        user_doc = db.collection("users").document(email).get()
         if not user_doc.exists:
             raise HTTPException(status_code=404, detail="User not found")
         
-        db.collection("users").document(username).delete()
+        db.collection("users").document(email).delete()
         return "User deleted successfully"
     except HTTPException:
         raise
@@ -133,18 +155,24 @@ async def delete_user(username: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/{username}/exams", response_model=List[dict])
-async def get_user_exams(username: str):
+@router.get("/{email}/exams", response_model=List[dict])
+async def get_user_exams(email: str):
     """Get user's accessed exams"""
     try:
         db = get_db()
-        user_query = db.collection("users").where("username", "==", username).stream()
-        users = list(user_query)
+        # Try document by email first
+        user_doc = db.collection("users").document(email).get()
         
-        if not users:
-            raise HTTPException(status_code=404, detail="User not found")
+        if not user_doc.exists:
+            # Fall back to query
+            user_query = db.collection("users").where("email", "==", email).stream()
+            users = list(user_query)
+            if not users:
+                raise HTTPException(status_code=404, detail="User not found")
+            user_data = users[0].to_dict()
+        else:
+            user_data = user_doc.to_dict()
         
-        user_data = users[0].to_dict()
         return user_data.get("acessedExams", [])
     except HTTPException:
         raise
@@ -152,18 +180,24 @@ async def get_user_exams(username: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.put("/{username}/exams")
-async def update_user_accessed_exam(username: str, accessed_exam: dict, old_exam_id: str = None):
+@router.put("/{email}/exams")
+async def update_user_accessed_exam(email: str, accessed_exam: dict, old_exam_id: str = None):
     """Add or update an accessed exam for a user"""
     try:
         db = get_db()
-        user_query = db.collection("users").where("username", "==", username).stream()
-        users = list(user_query)
+        # Try document by email first
+        user_doc_ref = db.collection("users").document(email)
+        user_doc = user_doc_ref.get()
         
-        if not users:
-            raise HTTPException(status_code=404, detail="User not found")
+        if not user_doc.exists:
+            # Fall back to query
+            user_query = db.collection("users").where("email", "==", email).stream()
+            users = list(user_query)
+            if not users:
+                raise HTTPException(status_code=404, detail="User not found")
+            user_doc = users[0]
+            user_doc_ref = db.collection("users").document(user_doc.id)
         
-        user_doc = users[0]
         user_data = user_doc.to_dict()
         accessed_exams = user_data.get("acessedExams", [])
         
@@ -175,11 +209,11 @@ async def update_user_accessed_exam(username: str, accessed_exam: dict, old_exam
         accessed_exams.append(accessed_exam)
         
         # Update document
-        db.collection("users").document(user_doc.id).update({"acessedExams": accessed_exams})
+        user_doc_ref.update({"acessedExams": accessed_exams})
         
         # Automatically update leaderboard if exam is finished
         if accessed_exam.get("status") == "ZAVRŠEN":
-            await update_user_leaderboard_entry(user_doc.id)
+            await update_user_leaderboard_entry(user_doc_ref.id)
         
         return {"message": "Accessed exam updated successfully", "acessedExams": accessed_exams}
     except HTTPException:
@@ -188,18 +222,24 @@ async def update_user_accessed_exam(username: str, accessed_exam: dict, old_exam
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.delete("/{username}/exams/{exam_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_user_accessed_exam(username: str, exam_id: str):
+@router.delete("/{email}/exams/{exam_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_user_accessed_exam(email: str, exam_id: str):
     """Remove an accessed exam from a user"""
     try:
         db = get_db()
-        user_query = db.collection("users").where("username", "==", username).stream()
-        users = list(user_query)
+        # Try document by email first
+        user_doc_ref = db.collection("users").document(email)
+        user_doc = user_doc_ref.get()
         
-        if not users:
-            raise HTTPException(status_code=404, detail="User not found")
+        if not user_doc.exists:
+            # Fall back to query
+            user_query = db.collection("users").where("email", "==", email).stream()
+            users = list(user_query)
+            if not users:
+                raise HTTPException(status_code=404, detail="User not found")
+            user_doc = users[0]
+            user_doc_ref = db.collection("users").document(user_doc.id)
         
-        user_doc = users[0]
         user_data = user_doc.to_dict()
         accessed_exams = user_data.get("acessedExams", [])
         
@@ -207,7 +247,7 @@ async def delete_user_accessed_exam(username: str, exam_id: str):
         accessed_exams = [exam for exam in accessed_exams if exam.get("id") != exam_id]
         
         # Update document
-        db.collection("users").document(user_doc.id).update({"acessedExams": accessed_exams})
+        user_doc_ref.update({"acessedExams": accessed_exams})
         
         return None
     except HTTPException:
