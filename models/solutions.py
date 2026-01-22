@@ -39,3 +39,37 @@ class Group(BaseModel):
 
 class ExamInfo(BaseModel):
     groups: List[Group]
+
+
+class TaskResult(BaseModel):
+    """Result for a single task"""
+    id: str
+    text: str
+    user_answer: Optional[bool] = None
+    correct_answer: Optional[bool] = None
+    is_correct: bool
+    points_earned: float
+    image: Optional[str] = None
+
+
+class GroupResult(BaseModel):
+    """Results for a group"""
+    id: str
+    text: str
+    tasks: List[TaskResult]
+
+
+class ExamResultResponse(BaseModel):
+    """Complete exam result with scores and correct answers"""
+    exam_id: str
+    exam_title: str
+    exam_password: str
+    user_email: str
+    groups: List[GroupResult]
+    total_points: float
+    achieved_points: float
+    correct_count: int
+    incorrect_count: int
+    unanswered_count: int
+    total_tasks: int
+    leaderboard_message: str
