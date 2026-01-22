@@ -43,11 +43,18 @@ async def upload_solution(submission: SolutionSubmission):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/{exam_id}/{password}/users", response_model=List[UserSolutionResponse])
-async def get_users_with_scores(exam_id: str, password: str, exam_info: ExamInfo):
+@router.get("/{exam_id}/{password}/users", response_model=List[UserSolutionResponse])
+async def get_users_with_scores(exam_id: str, password: str):
     """Get all users who solved this exam with their scores"""
     try:
         db = get_db()
+        
+        # Get the exam data from backend to calculate scores
+        exam_doc = db.collection("exams").document(exam_id).get()
+        if not exam_doc.exists:
+            raise HTTPException(status_code=404, detail="Exam not found")
+        
+        exam_data = exam_doc.to_dict()
         
         # Get all solutions for this exam
         solutions_ref = db.collection("solutions").document(exam_id).collection(password).stream()
@@ -55,12 +62,13 @@ async def get_users_with_scores(exam_id: str, password: str, exam_info: ExamInfo
         solutions_list = list(solutions_ref)
         print(f"DEBUG: Found {len(solutions_list)} solutions for exam {exam_id}/{password}")
         
-        # Calculate total tasks from exam_info
-        total_tasks = sum(len(group.tasks) for group in exam_info.groups)
-        flat_tasks = [task for group in exam_info.groups for task in group.tasks]
+        # Calculate total tasks from exam data
+        groups = exam_data.get("groups", [])
+        total_tasks = sum(len(group.get("tasks", [])) for group in groups)
+        flat_tasks = [task for group in groups for task in group.get("tasks", [])]
         
         print(f"DEBUG: Total tasks: {total_tasks}, flat_tasks: {len(flat_tasks)}")
-        print(f"DEBUG: Exam info groups: {len(exam_info.groups)}")
+        print(f"DEBUG: Exam groups: {len(groups)}")
         
         users_with_scores = []
         
@@ -74,7 +82,7 @@ async def get_users_with_scores(exam_id: str, password: str, exam_info: ExamInfo
             # Calculate correct answers
             correct_count = 0
             for i, sol in enumerate(solutions):
-                if i < len(flat_tasks) and sol.get("state") == flat_tasks[i].state:
+                if i < len(flat_tasks) and sol.get("state") == flat_tasks[i].get("state"):
                     correct_count += 1
             
             percent = round((correct_count / total_tasks) * 100) if total_tasks > 0 else 0
@@ -98,6 +106,8 @@ async def get_users_with_scores(exam_id: str, password: str, exam_info: ExamInfo
         
         print(f"DEBUG: Returning {len(users_with_scores)} users with scores")
         return users_with_scores
+    except HTTPException:
+        raise
     except Exception as e:
         print(f"ERROR: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))

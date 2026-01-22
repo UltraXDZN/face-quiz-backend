@@ -150,6 +150,7 @@ async def get_exam_metadata(exam_id: str):
         return ExamMetadata(
             id=exam_data.get("id"),
             title=exam_data.get("title"),
+            password=exam_data.get("password"),
             description=exam_data.get("description"),
             creator=exam_data.get("creator"),
             timeLimit=exam_data.get("timeLimit"),
