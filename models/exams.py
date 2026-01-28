@@ -11,10 +11,24 @@ class Task(BaseModel):
     negative_points: Optional[float] = None
 
 
+class TaskWithoutAnswer(BaseModel):
+    """Task without the correct answer (state field)"""
+    id: str
+    text: str
+    image: Optional[str] = None
+
+
 class Group(BaseModel):
     id: str
     text: str  # Changed from name to text
     tasks: List[Task]
+
+
+class GroupWithoutAnswers(BaseModel):
+    """Group with tasks without correct answers"""
+    id: str
+    text: str
+    tasks: List[TaskWithoutAnswer]
 
 
 class Exam(BaseModel):
@@ -40,6 +54,29 @@ class Exam(BaseModel):
     shuffleQuestions: Optional[bool] = None
 
 
+class ExamForStudent(BaseModel):
+    """Exam without correct answers for students"""
+    id: str
+    title: str
+    password: str
+    description: Optional[str] = ""
+    creator: Optional[str] = None
+    groups: List[GroupWithoutAnswers]
+    timestamp: Optional[int] = None
+    accessLimit: Optional[bool] = None
+    timeLimit: Optional[int] = None
+    startLimit: Optional[int] = None
+    endLimit: Optional[int] = None
+    version: Optional[int] = None
+    lastUpdatedTimestamp: Optional[int] = None
+    createdTimestamp: Optional[int] = None
+    lastUpdatedBy: Optional[str] = None
+    createdBy: Optional[str] = None
+    numberOfDisplayedQuestions: Optional[int] = None
+    activeExam: Optional[bool] = None
+    shuffleQuestions: Optional[bool] = None
+
+
 class ShortExam(BaseModel):
     id: str
     title: str
@@ -51,6 +88,21 @@ class ShortExam(BaseModel):
     startLimit: Optional[int] = None
     endLimit: Optional[int] = None
     version: int
+
+
+class ExamMetadata(BaseModel):
+    """Exam metadata without questions/answers"""
+    id: str
+    title: str
+    description: Optional[str] = ""
+    creator: Optional[str] = None
+    timeLimit: Optional[int] = None
+    activeExam: Optional[bool] = None
+    shuffleQuestions: Optional[bool] = None
+    numberOfDisplayedQuestions: Optional[int] = None
+    accessLimit: Optional[bool] = None
+    startLimit: Optional[int] = None
+    endLimit: Optional[int] = None
 
 
 class ExamPasswordsUpdate(BaseModel):

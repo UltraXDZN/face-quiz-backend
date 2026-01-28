@@ -2,7 +2,10 @@ import os
 from fastapi import APIRouter, HTTPException, status
 from google.cloud import firestore
 from google.auth.credentials import AnonymousCredentials
-from models.exams import Exam, ShortExam, ExamPasswordsUpdate, ExamsDataResponse
+from models.exams import (
+    Exam, ShortExam, ExamPasswordsUpdate, ExamsDataResponse, ExamMetadata,
+    ExamForStudent, GroupWithoutAnswers, TaskWithoutAnswer
+)
 from typing import List
 
 router = APIRouter(prefix="/api/exams", tags=["exams"])
@@ -131,9 +134,9 @@ async def get_exams_data():
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/{exam_id}", response_model=Exam)
-async def get_exam(exam_id: str):
-    """Get a specific exam by ID"""
+@router.get("/{exam_id}/metadata", response_model=ExamMetadata)
+async def get_exam_metadata(exam_id: str):
+    """Get exam metadata without questions/answers"""
     try:
         db = get_db()
         exam_doc = db.collection("exams").document(exam_id).get()
@@ -141,7 +144,99 @@ async def get_exam(exam_id: str):
         if not exam_doc.exists:
             raise HTTPException(status_code=404, detail="Exam not found")
         
-        return exam_doc.to_dict()
+        exam_data = exam_doc.to_dict()
+        
+        # Return only metadata fields
+        return ExamMetadata(
+            id=exam_data.get("id"),
+            title=exam_data.get("title"),
+            password=exam_data.get("password"),
+            description=exam_data.get("description"),
+            creator=exam_data.get("creator"),
+            timeLimit=exam_data.get("timeLimit"),
+            activeExam=exam_data.get("activeExam"),
+            shuffleQuestions=exam_data.get("shuffleQuestions"),
+            numberOfDisplayedQuestions=exam_data.get("numberOfDisplayedQuestions"),
+            accessLimit=exam_data.get("accessLimit"),
+            startLimit=exam_data.get("startLimit"),
+            endLimit=exam_data.get("endLimit")
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/{exam_id}/full", response_model=ExamForStudent)
+async def get_exam_full(exam_id: str):
+    """Get full exam with questions but WITHOUT correct answers (for started exams)"""
+    try:
+        db = get_db()
+        exam_doc = db.collection("exams").document(exam_id).get()
+        
+        if not exam_doc.exists:
+            raise HTTPException(status_code=404, detail="Exam not found")
+        
+        exam_data = exam_doc.to_dict()
+        
+        # Strip out the 'state' field from all tasks
+        groups_without_answers = []
+        for group in exam_data.get("groups", []):
+            tasks_without_answers = []
+            for task in group.get("tasks", []):
+                # Create task dict without state field
+                task_without_answer = {
+                    "id": task.get("id"),
+                    "text": task.get("text"),
+                    "image": task.get("image")
+                }
+                tasks_without_answers.append(TaskWithoutAnswer(**task_without_answer))
+            
+            group_without_answers = GroupWithoutAnswers(
+                id=group.get("id"),
+                text=group.get("text"),
+                tasks=tasks_without_answers
+            )
+            groups_without_answers.append(group_without_answers)
+        
+        # Return exam without correct answers
+        return ExamForStudent(
+            id=exam_data.get("id"),
+            title=exam_data.get("title"),
+            password=exam_data.get("password"),
+            description=exam_data.get("description"),
+            creator=exam_data.get("creator"),
+            timeLimit=exam_data.get("timeLimit"),
+            activeExam=exam_data.get("activeExam"),
+            shuffleQuestions=exam_data.get("shuffleQuestions"),
+            numberOfDisplayedQuestions=exam_data.get("numberOfDisplayedQuestions"),
+            accessLimit=exam_data.get("accessLimit"),
+            startLimit=exam_data.get("startLimit"),
+            endLimit=exam_data.get("endLimit"),
+            groups=groups_without_answers
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/{exam_id}/admin", response_model=Exam)
+async def get_exam_admin(exam_id: str):
+    """Get complete exam with ALL data including correct answers (for admin/editing)"""
+    try:
+        db = get_db()
+        exam_doc = db.collection("exams").document(exam_id).get()
+        
+        if not exam_doc.exists:
+            raise HTTPException(status_code=404, detail="Exam not found")
+        
+        exam_data = exam_doc.to_dict()
+        
+        # Return complete exam data as-is with all fields
+        return Exam(**exam_data)
+    except HTTPException:
+        raise
     except HTTPException:
         raise
     except Exception as e:
