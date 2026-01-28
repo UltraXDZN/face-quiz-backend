@@ -150,6 +150,7 @@ async def get_exam_metadata(exam_id: str):
         return ExamMetadata(
             id=exam_data.get("id"),
             title=exam_data.get("title"),
+            password=exam_data.get("password"),
             description=exam_data.get("description"),
             creator=exam_data.get("creator"),
             timeLimit=exam_data.get("timeLimit"),
@@ -205,21 +206,37 @@ async def get_exam_full(exam_id: str):
             password=exam_data.get("password"),
             description=exam_data.get("description"),
             creator=exam_data.get("creator"),
-            groups=groups_without_answers,
-            timestamp=exam_data.get("timestamp"),
-            accessLimit=exam_data.get("accessLimit"),
             timeLimit=exam_data.get("timeLimit"),
+            activeExam=exam_data.get("activeExam"),
+            shuffleQuestions=exam_data.get("shuffleQuestions"),
+            numberOfDisplayedQuestions=exam_data.get("numberOfDisplayedQuestions"),
+            accessLimit=exam_data.get("accessLimit"),
             startLimit=exam_data.get("startLimit"),
             endLimit=exam_data.get("endLimit"),
-            version=exam_data.get("version"),
-            lastUpdatedTimestamp=exam_data.get("lastUpdatedTimestamp"),
-            createdTimestamp=exam_data.get("createdTimestamp"),
-            lastUpdatedBy=exam_data.get("lastUpdatedBy"),
-            createdBy=exam_data.get("createdBy"),
-            numberOfDisplayedQuestions=exam_data.get("numberOfDisplayedQuestions"),
-            activeExam=exam_data.get("activeExam"),
-            shuffleQuestions=exam_data.get("shuffleQuestions")
+            groups=groups_without_answers
         )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/{exam_id}/admin", response_model=Exam)
+async def get_exam_admin(exam_id: str):
+    """Get complete exam with ALL data including correct answers (for admin/editing)"""
+    try:
+        db = get_db()
+        exam_doc = db.collection("exams").document(exam_id).get()
+        
+        if not exam_doc.exists:
+            raise HTTPException(status_code=404, detail="Exam not found")
+        
+        exam_data = exam_doc.to_dict()
+        
+        # Return complete exam data as-is with all fields
+        return Exam(**exam_data)
+    except HTTPException:
+        raise
     except HTTPException:
         raise
     except Exception as e:
