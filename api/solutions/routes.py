@@ -6,9 +6,13 @@ from models.solutions import (
     Solution, SolutionSubmission, UserSolutionResponse, 
     ExamInfo, Task, Group, ExamResultResponse, TaskResult, GroupResult
 )
-from typing import List
+from typing import List, Dict
+from collections import defaultdict
 
 router = APIRouter(prefix="/api/solutions", tags=["solutions"])
+
+# In-memory cache for exam results: {exam_id: {password: [ExamResultResponse]}}
+results_cache: Dict[str, Dict[str, List[ExamResultResponse]]] = defaultdict(dict)
 
 
 def get_db():
@@ -37,6 +41,45 @@ async def upload_solution(submission: SolutionSubmission):
         solution_ref = db.collection("solutions").document(submission.exam_id)\
                         .collection(submission.password).document(submission.email)
         solution_ref.set(solution_data)
+        
+        # Update in-memory cache after successful DB write
+        try:
+            print(f"[CACHE] Updating cache for {submission.exam_id}/{submission.password}/{submission.email}")
+            
+            # Get exam data
+            exam_doc = db.collection("exams").document(submission.exam_id).get()
+            if exam_doc.exists:
+                exam_data = exam_doc.to_dict()
+                user_solutions = solution_data.get("solutions", [])
+                
+                # Calculate results for this user
+                result = _calculate_user_results(
+                    submission.exam_id, 
+                    submission.password, 
+                    submission.email, 
+                    exam_data, 
+                    user_solutions, 
+                    db
+                )
+                
+                # Update cache
+                if submission.exam_id not in results_cache:
+                    results_cache[submission.exam_id] = {}
+                
+                if submission.password not in results_cache[submission.exam_id]:
+                    results_cache[submission.exam_id][submission.password] = []
+                
+                # Remove old result for this user if exists, then add new one
+                results_cache[submission.exam_id][submission.password] = [
+                    r for r in results_cache[submission.exam_id][submission.password] 
+                    if r.user_email != submission.email
+                ]
+                results_cache[submission.exam_id][submission.password].append(result)
+                
+                print(f"[CACHE] Cache updated. Total users in cache: {len(results_cache[submission.exam_id][submission.password])}")
+        except Exception as cache_error:
+            print(f"[CACHE] Error updating cache: {str(cache_error)}")
+            # Don't fail the request if cache update fails
         
         return {"message": "Solution uploaded successfully"}
     except Exception as e:
@@ -145,9 +188,16 @@ async def get_user_exam_results(exam_id: str, password: str, email: str):
 
 @router.get("/{exam_id}/{password}/results/all", response_model=List[ExamResultResponse])
 async def get_all_users_exam_results(exam_id: str, password: str):
-    """Get exam results for ALL users at once (optimized for admin view)"""
+    """Get exam results for ALL users at once (optimized for admin view with in-memory cache)"""
     try:
-        print(f"[BATCH] Fetching all results for exam {exam_id}/{password}")
+        # Check in-memory cache first
+        if exam_id in results_cache and password in results_cache[exam_id]:
+            cached_results = results_cache[exam_id][password]
+            if cached_results:
+                print(f"[CACHE] Returning cached results for {exam_id}/{password}: {len(cached_results)} users")
+                return cached_results
+        
+        print(f"[BATCH] Cache miss. Fetching all results from DB for exam {exam_id}/{password}")
         db = get_db()
         
         # Get the full exam with correct answers once
@@ -175,7 +225,13 @@ async def get_all_users_exam_results(exam_id: str, password: str):
                 print(f"[BATCH] Error calculating results for {email}: {str(e)}")
                 continue
         
+        # Update cache after successful DB fetch
+        if exam_id not in results_cache:
+            results_cache[exam_id] = {}
+        results_cache[exam_id][password] = all_results
+        
         print(f"[BATCH] Returning results for {len(all_results)} users (processed {user_count} total)")
+        print(f"[CACHE] Cache populated with {len(all_results)} results")
         return all_results
     except HTTPException:
         raise
