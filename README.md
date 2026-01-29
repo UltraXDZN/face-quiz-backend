@@ -42,27 +42,59 @@ Svi implementirani API pozivi su testabilni na sljedećem *Postman* linku: https
 
 ### Users
 
-| API poziv                                 | Opis                          |
-| ----------------------------------------- | ----------------------------- |
-| `GET {{API_URL}}/api/users/`              | Lista svih korisnika          |
-| `POST {{API_URL}}/api/users/`             | Stvori korisnika              |
-| `GET {{API_URL}}/api/users/<username>`    | Dohvati specifičnog korisnika |
-| `PATCH {{API_URL}}/api/users/<username>`  | Ažuriranje specifičnog korisnika |
-| `DELETE {{API_URL}}/api/users/<username>` | Brisanje specifičnog korisnika |
+| API poziv                                           | Opis                                |
+| --------------------------------------------------- | ----------------------------------- |
+| `GET /api/users/`                                   | Dohvati sve korisnike               |
+| `POST /api/users/`                                  | Stvori korisnika                    |
+| `GET /api/users/{email}`                            | Dohvati specifičnog korisnika       |
+| `PATCH /api/users/{email}`                          | Ažuriraj korisnika                  |
+| `DELETE /api/users/{email}`                         | Obriši korisnika                    |
+| `GET /api/users/{email}/exams`                      | Dohvati korisnikove ispite          |
+| `PUT /api/users/{email}/exams`                      | Ažuriraj pristup korisnika ispitu   |
+| `DELETE /api/users/{email}/exams/{exam_id}`         | Obriši korisnikov pristup ispitu    |
+| `GET /api/users/tracking/created-users`             | Dohvati praćenje stvorenih korisnika |
+| `PUT /api/users/tracking/created-users/{email}`     | Ažuriraj praćenje stvorenog korisnika |
+
+### Solutions
+
+| API poziv                                                    | Opis                                  |
+| ------------------------------------------------------------ | ------------------------------------- |
+| `POST /api/solutions/`                                       | Upload rješenje                       |
+| `GET /api/solutions/{exam_id}/{password}/users`              | Dohvati korisnike s bodovima          |
+| `GET /api/solutions/{exam_id}/{password}/users/{email}/results` | Dohvati rezultate korisnika na ispitu |
+| `GET /api/solutions/{exam_id}/{password}/results/all`        | Dohvati rezultate svih korisnika      |
+| `POST /api/solutions/{exam_id}/{password}/users/{email}`     | Dohvati odgovore korisnika            |
 
 ### Exams
 
-| API poziv                                 | Opis                          |
-| ----------------------------------------- | ----------------------------- |
-| `POST {{API_URL}}/api/exams`              | Stvori Exam                   |
-| `GET {{API_URL}}/api/exams/data`          | Dohvati podatke o examu       |
-| `GET {{API_URL}}/api/users/<username>`    | Dohvati specifičnog korisnika |
-| `PATCH {{API_URL}}/api/users/<username>`  | Ažuriranje specifičnog korisnika |
-| `DELETE {{API_URL}}/api/users/<username>` | Brisanje specifičnog korisnika |
+| API poziv                              | Opis                             |
+| -------------------------------------- | -------------------------------- |
+| `POST /api/exams/`                     | Stvori ispit                     |
+| `GET /api/exams/data`                  | Dohvati podatke o svim ispitima  |
+| `GET /api/exams/{exam_id}/metadata`    | Dohvati metapodatke ispita       |
+| `GET /api/exams/{exam_id}/full`        | Dohvati cijeli ispit             |
+| `GET /api/exams/{exam_id}/admin`       | Dohvati admin prikaz ispita      |
+| `PUT /api/exams/{exam_id}`             | Ažuriraj ispit                   |
+| `DELETE /api/exams/{exam_id}`          | Obriši ispit                     |
 
-POST /api/exams - Create exam
-GET /api/exams/data - Get all exams metadata
-GET /api/exams/{exam_id} - Get specific exam
-PUT /api/exams/{exam_id} - Update exam
-DELETE /api/exams/{exam_id} - Delete exam
-POST /api/exams/{exam_id}/password - Set exam password
+### Leaderboard
+
+| API poziv                          | Opis                       |
+| ---------------------------------- | -------------------------- |
+| `GET /api/leaderboard/`            | Dohvati ljestvicu          |
+| `PUT /api/leaderboard/`            | Ažuriraj ljestvicu         |
+| `POST /api/leaderboard/generate`   | Generiraj ljestvicu        |
+
+### Auth
+
+| API poziv                    | Opis                      |
+| ---------------------------- | ------------------------- |
+| `GET /api/auth/google/login` | Google Login              |
+| `GET /api/auth/google/callback` | Google Callback        |
+| `POST /api/auth/verify`      | Verify User Token         |
+
+### Default
+
+| API poziv                    | Opis              |
+| ---------------------------- | ----------------- |
+| `GET /`                      | Root endpoint     |
