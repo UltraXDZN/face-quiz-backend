@@ -1,5 +1,5 @@
 import os
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException
 from google.cloud import firestore
 from google.auth.credentials import AnonymousCredentials
 from models.leaderboard import LeaderboardData, LeaderboardUpdateRequest, LeaderboardEntry
