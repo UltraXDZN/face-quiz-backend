@@ -1,8 +1,7 @@
 import os
 import time
 import boto3
-from fastapi import APIRouter, HTTPException, Query
-from models.exams import ExamCaptureMetadata
+from fastapi import APIRouter, HTTPException, Query, UploadFile, File, Form
 
 # Load config from environment
 AWS_ACCESS_KEY = os.getenv("AWS_ACCESS_KEY_ID")
@@ -16,26 +15,31 @@ s3_client = boto3.client("s3", aws_access_key_id=AWS_ACCESS_KEY, aws_secret_acce
 router = APIRouter(prefix="/api/media", tags=["media"])
 
 @router.post("/capture/")
-async def upload_capture(metadata: ExamCaptureMetadata):
+async def upload_capture(screenshot_file: UploadFile = File(...),
+    camera_file: UploadFile = File(...),
+    exam_id: str = Form(...),
+    email: str = Form(...),
+    timestamp_str: str = Form(None),
+):
     """Upload a screenshot and camera capture into a common timestamp folder.
     If timestamp_str is provided, the file is stored in that timestamp folder;
     otherwise a new timestamp (ms) is generated and returned so clients can reuse it."""
     try:
-        screenshot = await metadata.screenshot_file.read()
-        camera = await metadata.camera_file.read()
-        if metadata.timestamp_str:
+        screenshot = await screenshot_file.read()
+        camera = await camera_file.read()
+        if timestamp_str:
             try:
-                timestamp = int(metadata.timestamp_str)
+                timestamp = int(timestamp_str)
             except ValueError:
                 raise HTTPException(status_code=400, detail="Invalid timestamp")
         else:
             timestamp = int(time.time() * 1000)
 
         # Sanitise email for use as a path segment
-        safe_email = metadata.email.replace("@", "_at_").replace(".", "_")
+        safe_email = email.replace("@", "_at_").replace(".", "_")
 
-        s3_client.put_object(Bucket=BUCKET_NAME, Key=f"{metadata.exam_id}/{safe_email}/{timestamp}/screenshot.png", Body=screenshot, ContentType=(metadata.screenshot_file.content_type or "image/png"))
-        s3_client.put_object(Bucket=BUCKET_NAME, Key=f"{metadata.exam_id}/{safe_email}/{timestamp}/camera.png", Body=camera, ContentType=(metadata.camera_file.content_type or "image/png"))
+        s3_client.put_object(Bucket=BUCKET_NAME, Key=f"{exam_id}/{safe_email}/{timestamp}/screenshot.png", Body=screenshot, ContentType=(screenshot_file.content_type or "image/png"))
+        s3_client.put_object(Bucket=BUCKET_NAME, Key=f"{exam_id}/{safe_email}/{timestamp}/camera.png", Body=camera, ContentType=(camera_file.content_type or "image/png"))
         
         return {"message": "Upload successful", "timestamp": timestamp}
     except HTTPException:
