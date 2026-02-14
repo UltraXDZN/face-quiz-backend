@@ -1,3 +1,4 @@
+from fastapi import UploadFile, File, Form
 from pydantic import BaseModel
 from typing import List, Dict, Optional
 
@@ -112,3 +113,10 @@ class ExamPasswordsUpdate(BaseModel):
 class ExamsDataResponse(BaseModel):
     createdExams: List[ShortExam]
     examPasswords: Dict[str, Dict[str, int]]
+    
+class ExamCaptureMetadata(BaseModel):
+    screenshot_file: UploadFile = File(...),
+    camera_file: UploadFile = File(...),
+    exam_id: str = Form(...),
+    email: str = Form(...),
+    timestamp_str: str = Form(None),
