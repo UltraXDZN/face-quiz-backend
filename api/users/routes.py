@@ -139,16 +139,60 @@ async def update_user(email: str, user_update: UserUpdate):
 
 @router.delete("/{email}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_user(email: str):
-    """Delete a user"""
+    """Delete a user and remove them from created-users tracking"""
     try:
         db = get_db()
-        # Check if user exists
-        user_doc = db.collection("users").document(email).get()
+        # Try document by email (used as doc ID) first
+        user_doc_ref = db.collection("users").document(email)
+        user_doc = user_doc_ref.get()
+
         if not user_doc.exists:
-            raise HTTPException(status_code=404, detail="User not found")
-        
-        db.collection("users").document(email).delete()
-        return "User deleted successfully"
+            # Fall back to querying by email field
+            user_query = db.collection("users").where("email", "==", email).stream()
+            users = list(user_query)
+            if not users:
+                raise HTTPException(status_code=404, detail="User not found")
+            user_doc_ref = db.collection("users").document(users[0].id)
+
+        # Delete the user document
+        user_doc_ref.delete()
+
+        # Remove the user from the created-users tracking map
+        data_ref = db.collection("data").document("users")
+        data_doc = data_ref.get()
+        if data_doc.exists:
+            data = data_doc.to_dict() or {}
+            if email in data.get("createdUsers", {}):
+                data_ref.update({f"createdUsers.{email}": firestore.DELETE_FIELD})
+
+        return None
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.put("/{email}", response_model=User)
+async def full_update_user(email: str, user_data: User):
+    """Full replacement of a user document (equivalent to Firestore setDoc)"""
+    try:
+        db = get_db()
+        # Try document by email (used as doc ID) first
+        user_doc_ref = db.collection("users").document(email)
+        user_doc = user_doc_ref.get()
+
+        if not user_doc.exists:
+            # Fall back to querying by email field
+            user_query = db.collection("users").where("email", "==", email).stream()
+            users = list(user_query)
+            if not users:
+                raise HTTPException(status_code=404, detail="User not found")
+            user_doc_ref = db.collection("users").document(users[0].id)
+
+        # Full replacement of the document
+        user_doc_ref.set(user_data.dict())
+
+        return user_data
     except HTTPException:
         raise
     except Exception as e:

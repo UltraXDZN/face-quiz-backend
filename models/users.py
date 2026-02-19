@@ -10,6 +10,9 @@ class AccessedExam(BaseModel):
     totalPoints: float
     lastAccessed: int
     lastFinished: int
+    outOfExamCounter: Optional[int] = 0
+    cheatedReason: Optional[str] = ""
+    typeVersion: Optional[int] = 0
 
 
 class UserUISettings(BaseModel):
