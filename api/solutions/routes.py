@@ -382,3 +382,31 @@ async def get_user_answers(exam_id: str, password: str, email: str):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.delete("/{exam_id}/{password}/users/{email}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_user_solution(exam_id: str, password: str, email: str):
+    """Delete a specific user's solution for an exam"""
+    try:
+        db = get_db()
+        solution_ref = db.collection("solutions").document(exam_id)\
+                        .collection(password).document(email)
+        solution_doc = solution_ref.get()
+
+        if not solution_doc.exists:
+            raise HTTPException(status_code=404, detail="Solutions not found")
+
+        solution_ref.delete()
+
+        # Invalidate in-memory cache for this exam/password
+        if exam_id in results_cache and password in results_cache[exam_id]:
+            results_cache[exam_id][password] = [
+                r for r in results_cache[exam_id][password]
+                if r.user_email != email
+            ]
+
+        return None
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
