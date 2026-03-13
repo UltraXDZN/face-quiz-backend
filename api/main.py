@@ -29,6 +29,7 @@ from api.exams.routes import router as exams_router
 from api.leaderboard.routes import router as leaderboard_router
 from api.auth.routes import router as auth_router
 from api.media.routes import router as media_router
+from api.tags.routes import router as tags_router
 
 app = FastAPI(title="Face Quiz Backend", version="1.0.0")
 
@@ -92,6 +93,7 @@ app.include_router(leaderboard_router)
 app.include_router(auth_router)
 app.include_router(leaderboard_router)
 app.include_router(media_router)
+app.include_router(tags_router)
 
 @app.get("/")
 async def root():
