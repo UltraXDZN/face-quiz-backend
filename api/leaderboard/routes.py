@@ -5,7 +5,7 @@ from google.auth.credentials import AnonymousCredentials
 from models.leaderboard import LeaderboardData, LeaderboardUpdateRequest, LeaderboardEntry
 from typing import Dict
 
-router = APIRouter(prefix="/api/leaderboard", tags=["leaderboard"])
+router = APIRouter(prefix="/leaderboard", tags=["leaderboard"])
 
 
 def get_db():

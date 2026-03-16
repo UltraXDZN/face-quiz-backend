@@ -9,7 +9,7 @@ from models.solutions import (
 from typing import List, Dict
 from collections import defaultdict
 
-router = APIRouter(prefix="/api/solutions", tags=["solutions"])
+router = APIRouter(prefix="/solutions", tags=["solutions"])
 
 # In-memory cache for exam results: {exam_id: {password: [ExamResultResponse]}}
 results_cache: Dict[str, Dict[str, List[ExamResultResponse]]] = defaultdict(dict)

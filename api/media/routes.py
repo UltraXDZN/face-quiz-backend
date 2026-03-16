@@ -14,9 +14,9 @@ BUCKET_NAME = os.getenv("S3_BUCKET_NAME")
 # Create S3 client
 s3_client = boto3.client("s3", aws_access_key_id=AWS_ACCESS_KEY, aws_secret_access_key=AWS_SECRET_KEY, region_name=AWS_REGION)
 
-router = APIRouter(prefix="/api/media", tags=["media"])
+router = APIRouter(prefix="/media", tags=["media"])
 
-@router.post("/capture/")
+@router.post("/capture")
 async def upload_capture(screenshot_file: UploadFile = File(...),
     camera_file: UploadFile = File(...),
     exam_id: str = Form(...),
@@ -50,7 +50,7 @@ async def upload_capture(screenshot_file: UploadFile = File(...),
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/screenshots/")
+@router.get("/screenshots")
 async def list_screenshots(request: Request, exam_id: str, email: str = Query(None)):
     """List screenshots for an exam with timestamps, optionally filtered by student email.
     Each entry contains timestamp, screenshot_url and camera_url (when available)."""

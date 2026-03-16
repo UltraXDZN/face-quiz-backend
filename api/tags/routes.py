@@ -6,7 +6,7 @@ from google.auth.credentials import AnonymousCredentials
 from models.tags import Tag, TagCreate
 from typing import List
 
-router = APIRouter(prefix="/api/tags", tags=["tags"])
+router = APIRouter(prefix="/tags", tags=["tags"])
 
 
 def get_db():
