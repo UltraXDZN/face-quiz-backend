@@ -5,6 +5,8 @@ services:
       - "8000:8000"
     env_file:
       - .env
+    environment:
+      - FIREBASE_CREDENTIALS_PATH=/app/serviceAccountKey.json
     volumes:
       - ./serviceAccountKey.json:/app/serviceAccountKey.json:ro
     restart: unless-stopped

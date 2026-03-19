@@ -31,7 +31,7 @@ from api.auth.routes import router as auth_router
 from api.media.routes import router as media_router
 from api.tags.routes import router as tags_router
 
-app = FastAPI(title="Face Quiz Backend", version="1.0.0")
+app = FastAPI(title="Face Quiz Backend", version="1.0.0", root_path="/api")
 
 # Initialize Firebase
 if os.getenv("ENVIRONMENT") == "production":

@@ -6,7 +6,7 @@ from models.users import User, UserCreate, UserUpdate, UserUISettings
 from typing import List
 # Import leaderboard update helper
 from api.leaderboard.routes import update_user_leaderboard_entry
-router = APIRouter(prefix="/api/users", tags=["users"])
+router = APIRouter(prefix="/users", tags=["users"])
 
 
 def get_db():
