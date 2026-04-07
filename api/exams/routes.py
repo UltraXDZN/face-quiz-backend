@@ -2,6 +2,7 @@ import os
 from fastapi import APIRouter, HTTPException, status
 from google.cloud import firestore
 from google.auth.credentials import AnonymousCredentials
+import uuid
 from models.exams import (
     Exam, ShortExam, ExamPasswordsUpdate, ExamsDataResponse, ExamMetadata,
     ExamForStudent, GroupWithoutAnswers, TaskWithoutAnswer
@@ -30,6 +31,14 @@ async def create_exam(exam: Exam):
     """Create a new exam"""
     try:
         db = get_db()
+        
+        # Auto-generate missing IDs
+        for group in exam.groups:
+            if not group.id:
+                group.id = str(uuid.uuid4())
+            for task in group.tasks:
+                if not task.id:
+                    task.id = str(uuid.uuid4())
         
         # Check if password already exists
         data_doc = db.collection("data").document("exams").get()
