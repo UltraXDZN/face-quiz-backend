@@ -1,5 +1,6 @@
 from pydantic import BaseModel
 from typing import List, Dict, Optional
+import uuid
 
 
 class Task(BaseModel):
@@ -19,7 +20,7 @@ class TaskWithoutAnswer(BaseModel):
 
 
 class Group(BaseModel):
-    id: str
+    id: Optional[str] = None
     text: str  # Changed from name to text
     tasks: List[Task]
 
