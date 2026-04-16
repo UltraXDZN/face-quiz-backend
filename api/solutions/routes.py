@@ -130,10 +130,11 @@ async def get_users_with_scores(exam_id: str, password: str):
             
             percent = round((correct_count / total_tasks) * 100) if total_tasks > 0 else 0
             
-            # Get user data by email (document ID)
-            user_doc = db.collection("users").document(email).get()
-            if user_doc.exists:
-                user_data = user_doc.to_dict()
+            # Get user data by querying email field (doc ID is username, not email)
+            user_query = db.collection("users").where("email", "==", email).limit(1).stream()
+            user_docs = list(user_query)
+            if user_docs:
+                user_data = user_docs[0].to_dict()
             else:
                 user_data = {}
                 print(f"DEBUG: User {email} not found in users collection")
@@ -305,10 +306,11 @@ def _calculate_user_results(exam_id: str, password: str, email: str, exam_data: 
     # Update leaderboard with new exam result
     leaderboard_message = "Leaderboard updated"
     try:
-        # Get user data to find jmbag
-        user_doc = db.collection("users").document(email).get()
-        if user_doc.exists:
-            user_data = user_doc.to_dict()
+        # Get user data to find jmbag (doc ID is username, not email)
+        user_query = db.collection("users").where("email", "==", email).limit(1).stream()
+        user_docs = list(user_query)
+        if user_docs:
+            user_data = user_docs[0].to_dict()
             jmbag = user_data.get("jmbag")
             photo_url = user_data.get("photoURL")
             
