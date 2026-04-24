@@ -1,4 +1,5 @@
 import os
+from datetime import datetime
 from fastapi import APIRouter, HTTPException, status
 from google.cloud import firestore
 from google.auth.credentials import AnonymousCredentials
@@ -61,6 +62,37 @@ async def upload_solution(submission: SolutionSubmission):
                     user_solutions, 
                     db
                 )
+                
+                # Update user's acessedExams with calculated points
+                # This ensures pointsEarned and totalPoints are always up to date
+                try:
+                    user_query = db.collection("users").where("email", "==", submission.email).limit(1).stream()
+                    user_docs = list(user_query)
+                    if user_docs:
+                        user_doc_ref = db.collection("users").document(user_docs[0].id)
+                        user_data = user_docs[0].to_dict()
+                        accessed_exams = user_data.get("acessedExams", [])
+                        
+                        # Find and update the matching exam
+                        exam_found = False
+                        for ae in accessed_exams:
+                            if ae.get("id") == submission.exam_id:
+                                ae["pointsEarned"] = result.achieved_points
+                                ae["totalPoints"] = result.total_points
+                                ae["status"] = "ZAVRŠEN"
+                                ae["lastFinished"] = int(datetime.now().timestamp() * 1000)
+                                exam_found = True
+                                break
+                        
+                        if exam_found:
+                            user_doc_ref.update({"acessedExams": accessed_exams})
+                            print(f"[USER] Updated acessedExams for {submission.email}: {result.achieved_points}/{result.total_points}")
+                        else:
+                            print(f"[USER] Exam {submission.exam_id} not found in user's acessedExams")
+                    else:
+                        print(f"[USER] User {submission.email} not found for acessedExams update")
+                except Exception as user_update_error:
+                    print(f"[USER] Error updating acessedExams: {str(user_update_error)}")
                 
                 # Update cache
                 if submission.exam_id not in results_cache:
