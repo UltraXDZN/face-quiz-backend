@@ -4,6 +4,9 @@ import boto3
 from fastapi import APIRouter, HTTPException, Query, UploadFile, File, Form, Request
 from fastapi.responses import StreamingResponse
 from io import BytesIO
+import cv2
+import numpy as np
+from api.media.face_detection import detect_faces
 
 # Load config from environment
 AWS_ACCESS_KEY = os.getenv("AWS_ACCESS_KEY_ID")
@@ -15,6 +18,7 @@ BUCKET_NAME = os.getenv("S3_BUCKET_NAME")
 s3_client = boto3.client("s3", aws_access_key_id=AWS_ACCESS_KEY, aws_secret_access_key=AWS_SECRET_KEY, region_name=AWS_REGION)
 
 router = APIRouter(prefix="/media", tags=["media"])
+
 
 @router.post("/capture")
 async def upload_capture(screenshot_file: UploadFile = File(...),
@@ -113,5 +117,34 @@ async def get_camera(exam_id: str, safe_email: str, timestamp: str):
         return StreamingResponse(BytesIO(image_data), media_type="image/png")
     except s3_client.exceptions.NoSuchKey:
         raise HTTPException(status_code=404, detail="Camera image not found")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/face-check")
+async def face_check(image: UploadFile = File(...), confidence: float = Form(0.5)):
+    """Detect face(s) from a single camera frame."""
+    try:
+        image_bytes = await image.read()
+        np_buffer = np.frombuffer(image_bytes, np.uint8)
+        frame = cv2.imdecode(np_buffer, cv2.IMREAD_COLOR)
+        if frame is None:
+            raise HTTPException(status_code=400, detail="Invalid image data")
+
+        face_count, _ = detect_faces(frame, float(confidence))
+        if face_count == 1:
+            status = "single"
+        elif face_count > 1:
+            status = "multiple"
+        else:
+            status = "none"
+
+        return {
+            "faceDetected": face_count == 1,
+            "faceCount": face_count,
+            "status": status,
+        }
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
