@@ -137,12 +137,8 @@ async def get_users_with_scores(exam_id: str, password: str):
         solutions_list = list(solutions_ref)
         print(f"DEBUG: Found {len(solutions_list)} solutions for exam {exam_id}/{password}")
         
-        # Calculate total tasks from exam data
         groups = exam_data.get("groups", [])
-        total_tasks = sum(len(group.get("tasks", [])) for group in groups)
-        flat_tasks = [task for group in groups for task in group.get("tasks", [])]
         
-        print(f"DEBUG: Total tasks: {total_tasks}, flat_tasks: {len(flat_tasks)}")
         print(f"DEBUG: Exam groups: {len(groups)}")
         
         users_with_scores = []
@@ -154,13 +150,17 @@ async def get_users_with_scores(exam_id: str, password: str):
             
             print(f"DEBUG: Processing email {email} with {len(solutions)} solutions")
             
-            # Calculate correct answers
+            displayed_ids = _get_displayed_task_ids(exam_data, email)
+            displayed_tasks = [task for group in groups for task in group.get("tasks", []) if task.get("id") in displayed_ids]
+            total_displayed = len(displayed_tasks)
+            solution_map = {sol["id"]: sol.get("state") for sol in solutions}
+            
             correct_count = 0
-            for i, sol in enumerate(solutions):
-                if i < len(flat_tasks) and sol.get("state") == flat_tasks[i].get("state"):
+            for task in displayed_tasks:
+                if solution_map.get(task.get("id")) == task.get("state"):
                     correct_count += 1
             
-            percent = round((correct_count / total_tasks) * 100) if total_tasks > 0 else 0
+            percent = round((correct_count / total_displayed) * 100) if total_displayed > 0 else 0
             
             # Get user data by querying email field (doc ID is username, not email)
             user_query = db.collection("users").where("email", "==", email).limit(1).stream()
@@ -272,12 +272,57 @@ async def get_all_users_exam_results(exam_id: str, password: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+def _get_displayed_task_ids(exam_data: dict, email: str) -> set:
+    """Recompute which tasks were displayed to the student. Must match /full endpoint logic exactly."""
+    raw_groups = exam_data.get("groups", [])
+    shuffle_groups = exam_data.get("shuffleQuestions", False)
+    shuffle_tasks = exam_data.get("shuffleTasks", False)
+    num_displayed = exam_data.get("numberOfDisplayedQuestions")
+    num_tasks_displayed = exam_data.get("numberOfDisplayedTasks")
+    exam_id = exam_data.get("id", "")
+    
+    prepared_groups = raw_groups
+    if shuffle_groups and email:
+        import random
+        seed = hash(email + exam_id) % (2**32)
+        rng = random.Random(seed)
+        prepared_groups = list(raw_groups)
+        rng.shuffle(prepared_groups)
+        if num_displayed is not None:
+            try:
+                num_int = int(num_displayed)
+                if num_int > 0:
+                    prepared_groups = prepared_groups[:num_int]
+            except (TypeError, ValueError):
+                pass
+    
+    displayed_ids = set()
+    for group in prepared_groups:
+        raw_tasks = group.get("tasks", [])
+        if shuffle_tasks and email:
+            import random
+            seed = hash(email + exam_id + group.get("id", "")) % (2**32)
+            rng = random.Random(seed)
+            tasks_list = list(raw_tasks)
+            rng.shuffle(tasks_list)
+            raw_tasks = tasks_list
+        if num_tasks_displayed is not None:
+            try:
+                num_tasks_int = int(num_tasks_displayed)
+                if num_tasks_int > 0:
+                    raw_tasks = raw_tasks[:num_tasks_int]
+            except (TypeError, ValueError):
+                pass
+        for task in raw_tasks:
+            displayed_ids.add(task.get("id"))
+    return displayed_ids
+
+
 def _calculate_user_results(exam_id: str, password: str, email: str, exam_data: dict, user_solutions: list, db) -> ExamResultResponse:
     """Helper function to calculate results for a single user"""
-    # Create a map of user solutions for quick lookup
     solution_map = {sol["id"]: sol.get("state") for sol in user_solutions}
+    displayed_task_ids = _get_displayed_task_ids(exam_data, email)
     
-    # Calculate results for each task
     group_results = []
     total_points = 0.0
     achieved_points = 0.0
@@ -291,6 +336,8 @@ def _calculate_user_results(exam_id: str, password: str, email: str, exam_data: 
         
         for task in group.get("tasks", []):
             task_id = task.get("id")
+            if task_id not in displayed_task_ids:
+                continue
             correct_answer = task.get("state")
             user_answer = solution_map.get(task_id)
             positive_points = task.get("positive_points", 1.0)
@@ -299,7 +346,6 @@ def _calculate_user_results(exam_id: str, password: str, email: str, exam_data: 
             total_points += positive_points
             total_tasks += 1
             
-            # Calculate if answer is correct and points earned
             is_correct = user_answer == correct_answer
             points_earned = 0.0
             
@@ -325,14 +371,16 @@ def _calculate_user_results(exam_id: str, password: str, email: str, exam_data: 
             )
             task_results.append(task_result)
         
+        if not task_results:
+            continue
+        
         group_result = GroupResult(
             id=group.get("id"),
             text=group.get("text", ""),
             tasks=task_results
         )
         group_results.append(group_result)
-    
-    # Ensure achieved_points is not negative
+
     achieved_points = max(0.0, achieved_points)
     
     # Update leaderboard with new exam result

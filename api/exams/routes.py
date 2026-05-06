@@ -1,5 +1,5 @@
 import os
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, status, Query
 from google.cloud import firestore
 from google.auth.credentials import AnonymousCredentials
 import uuid
@@ -165,7 +165,9 @@ async def get_exam_metadata(exam_id: str):
             timeLimit=exam_data.get("timeLimit"),
             activeExam=exam_data.get("activeExam"),
             shuffleQuestions=exam_data.get("shuffleQuestions"),
+            shuffleTasks=exam_data.get("shuffleTasks"),
             numberOfDisplayedQuestions=exam_data.get("numberOfDisplayedQuestions"),
+            numberOfDisplayedTasks=exam_data.get("numberOfDisplayedTasks"),
             accessLimit=exam_data.get("accessLimit"),
             startLimit=exam_data.get("startLimit"),
             endLimit=exam_data.get("endLimit")
@@ -177,8 +179,9 @@ async def get_exam_metadata(exam_id: str):
 
 
 @router.get("/{exam_id}/full", response_model=ExamForStudent)
-async def get_exam_full(exam_id: str):
-    """Get full exam with questions but WITHOUT correct answers (for started exams)"""
+async def get_exam_full(exam_id: str, email: str = Query(default="")):
+    """Get full exam with questions but WITHOUT correct answers (for started exams).
+    If shuffleQuestions is enabled, groups and tasks are shuffled deterministically per student email."""
     try:
         db = get_db()
         exam_doc = db.collection("exams").document(exam_id).get()
@@ -187,13 +190,53 @@ async def get_exam_full(exam_id: str):
             raise HTTPException(status_code=404, detail="Exam not found")
         
         exam_data = exam_doc.to_dict()
+        raw_groups = exam_data.get("groups", [])
+        shuffle_groups = exam_data.get("shuffleQuestions", False)
+        shuffle_tasks = exam_data.get("shuffleTasks", False)
+        num_displayed = exam_data.get("numberOfDisplayedQuestions")
+        num_tasks_displayed = exam_data.get("numberOfDisplayedTasks")
+        
+        # Prepare groups (shuffle if enabled)
+        prepared_groups = raw_groups
+        if shuffle_groups and email:
+            import random
+            seed = hash(email + exam_id) % (2**32)
+            rng = random.Random(seed)
+            prepared_groups = list(raw_groups)
+            rng.shuffle(prepared_groups)
+            if num_displayed is not None:
+                try:
+                    num_int = int(num_displayed)
+                    if num_int > 0:
+                        prepared_groups = prepared_groups[:num_int]
+                except (TypeError, ValueError):
+                    pass
         
         # Strip out the 'state' field from all tasks
         groups_without_answers = []
-        for group in exam_data.get("groups", []):
+        for group in prepared_groups:
+            raw_tasks = group.get("tasks", [])
+            
+            # Shuffle tasks within group if enabled (independent of group shuffle)
+            if shuffle_tasks and email:
+                import random
+                seed = hash(email + exam_id + group.get("id", "")) % (2**32)
+                rng = random.Random(seed)
+                tasks_list = list(raw_tasks)
+                rng.shuffle(tasks_list)
+                raw_tasks = tasks_list
+            
+            # Limit tasks per group if specified
+            if num_tasks_displayed is not None:
+                try:
+                    num_tasks_int = int(num_tasks_displayed)
+                    if num_tasks_int > 0:
+                        raw_tasks = raw_tasks[:num_tasks_int]
+                except (TypeError, ValueError):
+                    pass
+            
             tasks_without_answers = []
-            for task in group.get("tasks", []):
-                # Create task dict without state field
+            for task in raw_tasks:
                 task_without_answer = {
                     "id": task.get("id"),
                     "text": task.get("text"),
@@ -208,7 +251,7 @@ async def get_exam_full(exam_id: str):
             )
             groups_without_answers.append(group_without_answers)
         
-        # Return exam without correct answers
+        # Return exam
         return ExamForStudent(
             id=exam_data.get("id"),
             title=exam_data.get("title"),
@@ -218,7 +261,9 @@ async def get_exam_full(exam_id: str):
             timeLimit=exam_data.get("timeLimit"),
             activeExam=exam_data.get("activeExam"),
             shuffleQuestions=exam_data.get("shuffleQuestions"),
+            shuffleTasks=exam_data.get("shuffleTasks"),
             numberOfDisplayedQuestions=exam_data.get("numberOfDisplayedQuestions"),
+            numberOfDisplayedTasks=exam_data.get("numberOfDisplayedTasks"),
             accessLimit=exam_data.get("accessLimit"),
             startLimit=exam_data.get("startLimit"),
             endLimit=exam_data.get("endLimit"),
