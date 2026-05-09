@@ -42,5 +42,7 @@
                 --name backend \
                 --restart unless-stopped \
                 --env-file /home/jcrljenko/facequiz-backend/face-quiz-backend/.env \
+                -e FIREBASE_CREDENTIALS_PATH=/app/serviceAccountKey.json \
+                -v /home/jcrljenko/facequiz-backend/face-quiz-backend/serviceAccountKey.json:/app/serviceAccountKey.json:ro \
                 -p 8000:8000 \
                 ${{ env.IMAGE_NAME }}:latest
