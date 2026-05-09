@@ -41,6 +41,6 @@
               docker run -d \
                 --name backend \
                 --restart unless-stopped \
-                --env-file /opt/facequiz/backend/.env \
+                --env-file /home/jcrljenko/facequiz-backend/face-quiz-backend/.env \
                 -p 8000:8000 \
                 ${{ env.IMAGE_NAME }}:latest
