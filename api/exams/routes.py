@@ -1,7 +1,12 @@
 import os
 from fastapi import APIRouter, HTTPException, status, Query
+from fastapi.responses import JSONResponse, StreamingResponse
 from google.cloud import firestore
 from google.auth.credentials import AnonymousCredentials
+from io import BytesIO
+import zipfile
+import json
+import re
 import uuid
 from models.exams import (
     Exam, ShortExam, ExamPasswordsUpdate, ExamsDataResponse, ExamMetadata,
@@ -373,6 +378,66 @@ async def update_exam(exam_id: str, exam: Exam):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.post("/{exam_id}/duplicate", status_code=status.HTTP_201_CREATED)
+async def duplicate_exam(exam_id: str):
+    """Duplicate an existing exam with a new ID"""
+    try:
+        db = get_db()
+
+        # Get original exam
+        exam_ref = db.collection("exams").document(exam_id)
+        exam_doc = exam_ref.get()
+
+        if not exam_doc.exists:
+            raise HTTPException(status_code=404, detail="Exam not found")
+
+        exam_data = exam_doc.to_dict()
+
+        # Generate new ID
+        new_id = str(uuid.uuid4())
+
+        # Create new exam document with new ID
+        new_exam_data = {**exam_data, "id": new_id}
+        db.collection("exams").document(new_id).set(new_exam_data)
+
+        # Create new ShortExam and add to createdExams
+        new_short_exam = {
+            "id": new_id,
+            "title": exam_data.get("title", "") + " (kopija)",
+            "creator": exam_data.get("creator"),
+            "timestamp": exam_data.get("timestamp"),
+            "password": exam_data.get("password", ""),
+            "accessLimit": exam_data.get("accessLimit", False),
+            "timeLimit": exam_data.get("timeLimit", 1),
+            "startLimit": exam_data.get("startLimit", None),
+            "endLimit": exam_data.get("endLimit", None),
+            "version": 0
+        }
+
+        data_ref = db.collection("data").document("exams")
+        data_ref.update({
+            "createdExams": firestore.ArrayUnion([new_short_exam])
+        })
+
+        # Also copy the password entry
+        data_doc = db.collection("data").document("exams").get()
+        if data_doc.exists:
+            data = data_doc.to_dict()
+            exam_passwords = data.get("examPasswords", {})
+            if exam_id in exam_passwords:
+                data_ref.set({
+                    "examPasswords": {
+                        new_id: exam_passwords[exam_id]
+                    }
+                }, merge=True)
+
+        return {"message": "Exam duplicated successfully", "newExamId": new_id}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.delete("/{exam_id}")
 async def delete_exam(exam_id: str):
     """Delete an exam"""
@@ -413,6 +478,79 @@ async def delete_exam(exam_id: str):
         db.collection("exams").document(exam_id).delete()
         
         return {"message": "Exam deleted successfully"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+def _sanitize_filename(value: str) -> str:
+    value = re.sub(r"[^\w\-.]+", "_", value.strip(), flags=re.UNICODE)
+    return value.strip("._") or "group"
+
+
+def _split_task_text(task_text: str):
+    marker = "(Pojašnjenje"
+    if marker not in task_text:
+        return task_text.strip(), ""
+    statement, explanation = task_text.split(marker, 1)
+    return statement.strip(), f"{marker}{explanation}".strip()
+
+
+def _build_group_markdown(group: dict) -> str:
+    lines = []
+    group_text = str(group.get("text", "") or "").strip()
+    if group_text:
+        lines.append(group_text)
+        lines.append("")
+
+    for task in group.get("tasks", []) or []:
+        statement, explanation = _split_task_text(str(task.get("text", "") or ""))
+        correctness = "Točno" if task.get("state") else "Netočno"
+        explanation_text = f" {explanation}" if explanation else ""
+        lines.append(f"1. {statement} [{correctness}] {explanation_text}".rstrip())
+
+    return "\n".join(lines).strip()
+
+
+@router.get("/{exam_id}/export")
+async def export_exam(exam_id: str, format: str = Query(default="json")):
+    """Export an exam as JSON or as a zip of Markdown group files"""
+    try:
+        db = get_db()
+        exam_doc = db.collection("exams").document(exam_id).get()
+
+        if not exam_doc.exists:
+            raise HTTPException(status_code=404, detail="Exam not found")
+
+        exam_data = exam_doc.to_dict()
+
+        if format.lower() == "md":
+            buffer = BytesIO()
+            exam_title = _sanitize_filename(str(exam_data.get("title", "exam")))
+            with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+                groups = exam_data.get("groups", []) or []
+                for index, group in enumerate(groups, start=1):
+                    group_title = _sanitize_filename(str(group.get("text", f"group_{index}"))[:60])
+                    filename = f"{index:02d}_{group_title or 'group'}.md"
+                    zf.writestr(filename, _build_group_markdown(group))
+
+            buffer.seek(0)
+            return StreamingResponse(
+                buffer,
+                media_type="application/zip",
+                headers={
+                    "Content-Disposition": f"attachment; filename={exam_title}_{exam_id}_md.zip",
+                },
+            )
+
+        return JSONResponse(
+            content=exam_data,
+            headers={
+                "Content-Disposition": f"attachment; filename=exam_{exam_id}.json",
+                "Content-Type": "application/json",
+            }
+        )
     except HTTPException:
         raise
     except Exception as e:
