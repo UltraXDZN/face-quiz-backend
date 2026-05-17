@@ -1,92 +1,64 @@
 """
-playground.py  (optimised)
-==========================
+playground.py  (optimised v3)
+==============================
+SCRFD face detection playground with passive liveness / anti-spoofing.
+
+Existing features preserved:
+* threaded camera capture
+* SCRFD detection
+* optional inference downscale
+* optional tracking on skipped frames
+* periodic frame saving into human/empty/multiple folders
+* optional video recording
+* multi-face warning
+* screenshots
+* overlay/HUD
+
+New liveness path:
+* optional ONNX anti-spoof model as primary passive FAS signal
+* old heuristic liveness remains fallback/support signal
+* per-track smoothing to avoid flickering LIVE/SPOOF decisions
 """
 
 from __future__ import annotations
 
 import argparse
-import queue
 import threading
 import time
 from collections import deque
 from datetime import datetime
 from pathlib import Path
-from typing import Deque, List, Optional
+from typing import Dict, List, Optional
 
 import cv2
 
 from detectors import Detection, InsightFaceSCRFDDetector
+from liveness import LivenessChecker
 from overlay import draw_overlay
 
-
-MODEL_NAME   = "InsightFace SCRFD"
+MODEL_NAME = "InsightFace SCRFD"
 CONTROL_HINT = "s  Screenshot\nq  Quit"
 
-# Sentinel used to stop the save worker thread
-_STOP_SENTINEL = None
-
 
 # ---------------------------------------------------------------------------
-# Background image-save worker
-# ---------------------------------------------------------------------------
-
-class ImageSaveWorker:
-    """
-    Encodes and writes JPEG frames in a dedicated daemon thread so the main
-    loop is never blocked by disk I/O or JPEG compression.
-
-    Queue items: (path, frame, quality) tuples.
-    The worker exits when it receives _STOP_SENTINEL.
-    """
-
-    def __init__(self, maxsize: int = 8):
-        self._q: queue.Queue = queue.Queue(maxsize=maxsize)
-        self._thread = threading.Thread(target=self._run, daemon=True)
-        self._thread.start()
-
-    def submit(self, path: Path, frame, quality: int = 85) -> None:
-        """Non-blocking; drops frame silently if the queue is full."""
-        try:
-            self._q.put_nowait((path, frame, quality))
-        except queue.Full:
-            pass   # prefer dropping a frame over blocking the capture loop
-
-    def stop(self, timeout: float = 2.0) -> None:
-        self._q.put(_STOP_SENTINEL)
-        self._thread.join(timeout=timeout)
-
-    def _run(self) -> None:
-        while True:
-            item = self._q.get()
-            if item is _STOP_SENTINEL:
-                break
-            path, frame, quality = item
-            try:
-                cv2.imwrite(str(path), frame, [cv2.IMWRITE_JPEG_QUALITY, quality])
-            except Exception as exc:
-                print(f"[!] Save error ({path}): {exc}")
-
-
-# ---------------------------------------------------------------------------
-# Frame grabber
+# FrameGrabber
 # ---------------------------------------------------------------------------
 
 class FrameGrabber:
     """Runs cap.read() in a background thread; exposes the latest frame."""
 
     def __init__(self, source):
-        self._cap   = cv2.VideoCapture(source)
-        self._lock  = threading.Lock()
-        self._frame: Optional[object] = None
-        self._ok    = False
-        self._stop  = threading.Event()
+        self._cap = cv2.VideoCapture(source)
+        self._lock = threading.Lock()
+        self._frame = None
+        self._ok = False
+        self._stop = threading.Event()
         self._thread = threading.Thread(target=self._run, daemon=True)
 
     def configure(self, width: int, height: int) -> None:
-        self._cap.set(cv2.CAP_PROP_FRAME_WIDTH,  width)
+        self._cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
         self._cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
-        self._cap.set(cv2.CAP_PROP_BUFFERSIZE,   1)
+        self._cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
     def open(self) -> bool:
         if not self._cap.isOpened():
@@ -96,7 +68,7 @@ class FrameGrabber:
 
     def read(self):
         with self._lock:
-            return self._ok, None if self._frame is None else self._frame.copy()
+            return self._ok, self._frame
 
     def release(self) -> None:
         self._stop.set()
@@ -107,7 +79,7 @@ class FrameGrabber:
         while not self._stop.is_set():
             ok, frame = self._cap.read()
             with self._lock:
-                self._ok    = ok
+                self._ok = ok
                 self._frame = frame
             if not ok:
                 break
@@ -117,98 +89,117 @@ class FrameGrabber:
 # Tracker helpers
 # ---------------------------------------------------------------------------
 
-def _find_tracker_ctor():
-    """
-    Probe once at startup rather than on every MultiTracker.reset() call.
-    Returns a callable or None.
-    """
+def _make_tracker():
     legacy = getattr(cv2, "legacy", None)
     if legacy is None:
         return None
     for attr in ("TrackerMOSSE_create", "TrackerKCF_create", "TrackerCSRT_create"):
         ctor = getattr(legacy, attr, None)
         if ctor is not None:
-            return ctor
+            return ctor()
     return None
 
 
-# Resolved once at module import time.
-_TRACKER_CTOR = _find_tracker_ctor()
-
-
 class MultiTracker:
-    """
-    Thin wrapper: re-initialise from SCRFD boxes, update on skipped frames.
-
-    Returns List[Detection] (not raw lists) so the rest of the pipeline
-    always works with a single concrete type.
-    """
+    """Thin wrapper: re-initialise from SCRFD boxes, update on skipped frames."""
 
     def __init__(self):
-        self._trackers = []
+        self._trackers: list = []
 
     def reset(self, frame, detections: List[Detection]) -> None:
         self._trackers = []
-
-        if _TRACKER_CTOR is None:
-            return
-
         for det in detections:
             x1, y1, x2, y2 = det.bbox
             bw, bh = x2 - x1, y2 - y1
             if bw <= 0 or bh <= 0:
                 continue
-            tracker = _TRACKER_CTOR()
-            tracker.init(frame, (x1, y1, bw, bh))
+            tracker = _make_tracker()
+            if tracker is None:
+                continue
+            tracker.init(frame, (int(x1), int(y1), int(bw), int(bh)))
             self._trackers.append(tracker)
 
     def update(self, frame) -> List[Detection]:
-        """Return List[Detection] with conf=0.0 (tracker-estimated)."""
-        results: List[Detection] = []
-        alive = []
-
+        results, alive = [], []
         for tracker in self._trackers:
             ok, bbox = tracker.update(frame)
             if not ok:
                 continue
             x, y, bw, bh = (int(v) for v in bbox)
-            results.append(Detection(bbox=(x, y, x + bw, y + bh), conf=0.0))
+            results.append(Detection((x, y, x + bw, y + bh), 0.0, None))
             alive.append(tracker)
-
         self._trackers = alive
         return results
 
 
 # ---------------------------------------------------------------------------
-# Argument parsing
+# CLI
 # ---------------------------------------------------------------------------
 
-def parse_args():
+def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="SCRFD face detection playground")
+    p.add_argument("--source", default=0, help="Video source: 0=webcam or path to video file")
+    p.add_argument("--save", action="store_true", help="Record output to <run>/recording.mp4")
+    p.add_argument("--width", type=int, default=1280)
+    p.add_argument("--height", type=int, default=720)
+    p.add_argument("--conf", type=float, default=0.5, help="SCRFD confidence threshold")
+    p.add_argument(
+        "--infer-size", type=int, default=0,
+        help="Downscale inference input to this width (0=full res). E.g. 320 or 480.",
+    )
+    p.add_argument(
+        "--skip", type=int, default=1,
+        help="Run SCRFD every N frames; use tracker on the rest. 1=every frame.",
+    )
+    p.add_argument(
+        "--store-every", type=int, default=30,
+        help="Save one inference frame every N frames (0=disable).",
+    )
+    p.add_argument("--detect-multiple", action="store_true", help="Enable warning when multiple faces are detected.")
+    p.add_argument("--multi-face-min", type=int, default=2, help="Minimum faces to trigger multi-face warning.")
 
-    p.add_argument("--source",  default=0,
-                   help="Video source: 0=webcam or path to video file")
-    p.add_argument("--save",    action="store_true",
-                   help="Record output to <run>/recording.mp4")
-    p.add_argument("--width",   type=int,   default=1280)
-    p.add_argument("--height",  type=int,   default=720)
-    p.add_argument("--conf",    type=float, default=0.5,
-                   help="SCRFD confidence threshold")
-    p.add_argument("--infer-size", type=int, default=0,
-                   help="Downscale inference input to this width (0 = full res). "
-                        "E.g. 320 or 480 for a large speed boost.")
-    p.add_argument("--skip",    type=int,   default=1,
-                   help="Run SCRFD every N frames; use tracker on the rest. "
-                        "1 = every frame (no skip).")
-    p.add_argument("--store-every", type=int, default=30,
-                   help="Save one inference frame every N frames (0 = disable).")
-    p.add_argument("--detect-multiple", action="store_true",
-                   help="Enable warning when multiple faces are detected.")
-    p.add_argument("--multi-face-min",  type=int, default=2,
-                   help="Minimum faces to trigger multi-face warning.")
-
+    p.add_argument("--no-liveness", action="store_true", help="Disable liveness check entirely.")
+    p.add_argument(
+        "--liveness-cooldown", type=int, default=12,
+        help="Frames between full liveness re-evaluations per face track.",
+    )
+    p.add_argument(
+        "--liveness-threshold", type=float, default=None,
+        help="Final smoothed liveness threshold. Default: 0.62 with ONNX, 0.42 heuristic-only.",
+    )
+    p.add_argument("--debug-liveness", action="store_true", help="Print per-cue liveness scores.")
+    p.add_argument("--antispoof-model", type=str, default=None, help="Path to ONNX anti-spoofing model.")
+    p.add_argument("--liveness-input-size", type=int, default=128, help="Fallback ONNX input size for dynamic models.")
+    p.add_argument(
+        "--liveness-live-index", type=int, default=1,
+        help="Output class index treated as LIVE/REAL. Silent-Face uses 1.",
+    )
+    p.add_argument(
+        "--liveness-crop-scale", type=float, default=2.7,
+        help="Face crop expansion for ONNX anti-spoofing. MiniFAS-style models often use ~2.7.",
+    )
+    p.add_argument(
+        "--liveness-input-scale", type=float, default=1.0 / 255.0,
+        help="Pixel multiplier before ONNX inference. Default converts 0-255 to 0-1.",
+    )
+    p.add_argument(
+        "--liveness-min-samples", type=int, default=3,
+        help="Number of evaluated samples before LIVE/SPOOF is emitted.",
+    )
+    p.add_argument(
+        "--liveness-ema-alpha", type=float, default=0.45,
+        help="EMA smoothing alpha for per-track liveness score.",
+    )
+    p.add_argument(
+        "--liveness-uncertain-margin", type=float, default=0.07,
+        help="Dead-zone around threshold where status is CHECK/uncertain.",
+    )
     return p.parse_args()
 
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 
 def normalize_source(src):
     try:
@@ -218,7 +209,7 @@ def normalize_source(src):
 
 
 def create_run_folder() -> Path:
-    ts      = datetime.now().strftime("%m_%d_%Y_%H_%M_%S")
+    ts = datetime.now().strftime("%m_%d_%Y_%H_%M_%S")
     run_dir = Path("output") / "runs" / ts
     for label in ("human", "empty", "multiple"):
         (run_dir / "scrfd" / label).mkdir(parents=True, exist_ok=True)
@@ -226,24 +217,7 @@ def create_run_folder() -> Path:
     return run_dir
 
 
-# ---------------------------------------------------------------------------
-# Face-count helpers (unchanged logic, consolidated here)
-# ---------------------------------------------------------------------------
-
-def count_faces(detections: List[Detection]) -> int:
-    return len(detections)
-
-
-def has_multiple_faces(detections: List[Detection], min_faces: int) -> bool:
-    return len(detections) >= min_faces
-
-
-# ---------------------------------------------------------------------------
-# Frame saving (delegates to the background worker)
-# ---------------------------------------------------------------------------
-
-def enqueue_inference_image(
-    worker: ImageSaveWorker,
+def save_inference_image(
     run_dir: Path,
     frame,
     detections: List[Detection],
@@ -251,32 +225,28 @@ def enqueue_inference_image(
     detect_multiple: bool = False,
     multi_face_min: int = 2,
 ) -> None:
-    face_count = count_faces(detections)
-
+    face_count = len(detections) if detections else 0
     if detect_multiple and face_count >= multi_face_min:
         label = "multiple"
     elif face_count > 0:
         label = "human"
     else:
         label = "empty"
-
-    ts       = datetime.now().strftime("%Y_%m_%d_%H_%M_%S_%f")
+    ts = datetime.now().strftime("%Y_%m_%d_%H_%M_%S_%f")
     filename = f"{ts}_scrfd_{frame_idx:06d}.jpg"
-    path     = run_dir / "scrfd" / label / filename
+    cv2.imwrite(
+        str(run_dir / "scrfd" / label / filename),
+        frame,
+        [cv2.IMWRITE_JPEG_QUALITY, 85],
+    )
 
-    worker.submit(path, frame, quality=85)
-
-
-# ---------------------------------------------------------------------------
-# Multi-face warning banner
-# ---------------------------------------------------------------------------
 
 def draw_multi_face_warning(vis, face_count: int):
-    text       = f"MULTIPLE FACES DETECTED: {face_count}"
-    font       = cv2.FONT_HERSHEY_SIMPLEX
+    text = f"MULTIPLE FACES DETECTED: {face_count}"
+    font = cv2.FONT_HERSHEY_SIMPLEX
     font_scale = 0.85
-    thickness  = 2
-    margin     = 12
+    thickness = 2
+    margin = 12
 
     (tw, th), baseline = cv2.getTextSize(text, font, font_scale, thickness)
     x, y = 20, 45
@@ -296,9 +266,9 @@ def draw_multi_face_warning(vis, face_count: int):
 # Main loop
 # ---------------------------------------------------------------------------
 
-def main():
+def main() -> None:
     args = parse_args()
-    args.skip           = max(1, args.skip)
+    args.skip = max(1, args.skip)
     args.multi_face_min = max(2, args.multi_face_min)
 
     Path("output").mkdir(exist_ok=True)
@@ -312,7 +282,44 @@ def main():
         print(f"[!] Failed to load SCRFD: {exc}")
         return
 
-    source  = normalize_source(args.source)
+    liveness_checker: Optional[LivenessChecker] = None
+    if not args.no_liveness:
+        threshold = args.liveness_threshold
+        if threshold is None:
+            threshold = 0.62 if args.antispoof_model else 0.42
+
+        try:
+            liveness_checker = LivenessChecker(
+                cooldown_frames=args.liveness_cooldown,
+                score_threshold=threshold,
+                debug=args.debug_liveness,
+                onnx_model_path=args.antispoof_model,
+                onnx_input_size=args.liveness_input_size,
+                onnx_live_index=args.liveness_live_index,
+                onnx_crop_scale=args.liveness_crop_scale,
+                onnx_input_scale=args.liveness_input_scale,
+                ema_alpha=args.liveness_ema_alpha,
+                min_samples=args.liveness_min_samples,
+                uncertain_margin=args.liveness_uncertain_margin,
+            )
+            debug_tag = " [DEBUG]" if args.debug_liveness else ""
+            print(
+                f"[+] Liveness enabled: backend={liveness_checker.backend_name}, "
+                f"cooldown={args.liveness_cooldown}, threshold={threshold:.2f}, "
+                f"min_samples={args.liveness_min_samples}{debug_tag}."
+            )
+        except Exception as exc:
+            print(f"[!] Failed to initialise ONNX liveness; falling back to heuristic-only. Reason: {exc}")
+            liveness_checker = LivenessChecker(
+                cooldown_frames=args.liveness_cooldown,
+                score_threshold=0.42 if args.liveness_threshold is None else args.liveness_threshold,
+                debug=args.debug_liveness,
+            )
+            print("[+] Liveness enabled: backend=heuristic fallback.")
+    else:
+        print("[+] Liveness disabled (--no-liveness).")
+
+    source = normalize_source(args.source)
     grabber = FrameGrabber(source)
     grabber.configure(args.width, args.height)
 
@@ -320,14 +327,11 @@ def main():
         print(f"[!] Cannot open video source: {source}")
         return
 
-    # Start the background save worker
-    save_worker = ImageSaveWorker(maxsize=8)
-
     print("[+] Waiting for first frame ...")
     first_frame = None
-    deadline    = time.time() + 5.0
+    deadline = time.monotonic() + 5.0
 
-    while time.time() < deadline:
+    while time.monotonic() < deadline:
         ok, frame = grabber.read()
         if ok and frame is not None:
             first_frame = frame
@@ -335,9 +339,8 @@ def main():
         time.sleep(0.02)
 
     if first_frame is None:
-        print("[!] Timed out waiting for first frame. Check camera/source.")
+        print("[!] Timed out waiting for first frame.")
         grabber.release()
-        save_worker.stop()
         return
 
     fh, fw = first_frame.shape[:2]
@@ -348,155 +351,131 @@ def main():
 
     writer = None
     if args.save:
-        fourcc   = cv2.VideoWriter_fourcc(*"mp4v")
+        fourcc = cv2.VideoWriter_fourcc(*"mp4v")
         rec_path = run_dir / "recording.mp4"
-        writer   = cv2.VideoWriter(str(rec_path), fourcc, 30, (fw, fh))
+        writer = cv2.VideoWriter(str(rec_path), fourcc, 30, (fw, fh))
         print(f"[+] Recording -> {rec_path}")
 
     if args.infer_size > 0 and args.infer_size < fw:
-        scale   = args.infer_size / fw
+        scale = args.infer_size / fw
         infer_w = args.infer_size
         infer_h = int(fh * scale)
-        inv_scale = 1.0 / scale
         print(f"[+] Inference input scaled to {infer_w}x{infer_h}")
     else:
-        scale     = 1.0
-        infer_w   = fw
-        infer_h   = fh
-        inv_scale = 1.0
+        scale = 1.0
+        infer_w = fw
+        infer_h = fh
 
     tracker = MultiTracker()
-
-    # ---- O(1) FPS buffer using deque with a fixed max length ---------------
-    fps_buf: Deque[float] = deque(maxlen=30)
-    prev_time     = time.perf_counter()
+    fps_buf = deque(maxlen=30)
+    prev_time = time.monotonic()
     screenshot_idx = 0
-    frame_idx      = 0
+    frame_idx = 0
     detections: List[Detection] = []
-    inf_ms         = 0.0
+    inf_ms = 0.0
     multi_face_active = False
+    liveness_results: Dict[int, object] = {}
 
     print(f"\n[Controls]\n{CONTROL_HINT}\n")
 
-    while True:
-        ok, frame = grabber.read()
-        if not ok or frame is None:
-            print("[!] Frame grab failed — end of stream or camera error.")
-            break
+    try:
+        while True:
+            ok, frame = grabber.read()
+            if not ok or frame is None:
+                print("[!] Frame grab failed — end of stream or camera error.")
+                break
 
-        frame_idx += 1
-        run_scrfd = args.skip <= 1 or frame_idx % args.skip == 1
+            frame_idx += 1
+            run_scrfd = args.skip <= 1 or frame_idx % args.skip == 1
 
-        if run_scrfd:
-            infer_frame = (
-                cv2.resize(frame, (infer_w, infer_h), interpolation=cv2.INTER_LINEAR)
-                if scale < 1.0
-                else frame
-            )
+            if run_scrfd:
+                infer_frame = (
+                    cv2.resize(frame, (infer_w, infer_h), interpolation=cv2.INTER_LINEAR)
+                    if scale < 1.0
+                    else frame
+                )
 
-            t0 = time.perf_counter()
-            try:
-                raw_dets = detector.detect(infer_frame)
-            except Exception as exc:
-                print(f"[!] Inference error: {exc}")
-                raw_dets = []
-            inf_ms = (time.perf_counter() - t0) * 1000
+                t0 = time.perf_counter()
+                try:
+                    raw_dets = detector.detect(infer_frame)
+                except Exception as exc:
+                    print(f"[!] Inference error: {exc}")
+                    raw_dets = []
+                inf_ms = (time.perf_counter() - t0) * 1000
 
-            # Scale detections back to display resolution — build Detection
-            # objects directly; no intermediate list of raw floats.
-            if scale < 1.0 and raw_dets:
-                detections = [
-                    Detection(
-                        bbox=(
-                            int(d.bbox[0] * inv_scale),
-                            int(d.bbox[1] * inv_scale),
-                            int(d.bbox[2] * inv_scale),
-                            int(d.bbox[3] * inv_scale),
-                        ),
-                        conf=d.conf,
-                        landmarks=(
-                            [(int(x * inv_scale), int(y * inv_scale)) for x, y in d.landmarks]
-                            if d.landmarks else None
-                        ),
-                    )
-                    for d in raw_dets
-                ]
+                if scale < 1.0 and raw_dets:
+                    inv = 1.0 / scale
+                    detections = [det.scaled(inv, inv).clipped(fw, fh) for det in raw_dets]
+                else:
+                    detections = [det.clipped(fw, fh) for det in raw_dets]
+
+                if args.skip > 1:
+                    tracker.reset(frame, detections)
             else:
-                detections = raw_dets
+                detections = tracker.update(frame)
 
-            if args.skip > 1:
-                tracker.reset(frame, detections)
+            face_count = len(detections)
 
-        else:
-            detections = tracker.update(frame)
+            if liveness_checker is not None and face_count > 0:
+                liveness_results = liveness_checker.update(frame, detections, frame_idx, return_details=True)
+            elif face_count == 0:
+                liveness_results = {}
 
-        face_count      = count_faces(detections)
-        multiple_faces  = (
-            args.detect_multiple
-            and has_multiple_faces(detections, args.multi_face_min)
-        )
+            multiple_faces = args.detect_multiple and face_count >= args.multi_face_min
+            if args.detect_multiple and multiple_faces != multi_face_active:
+                multi_face_active = multiple_faces
+                if multi_face_active:
+                    print(f"[!] Multiple faces detected: {face_count} faces at frame {frame_idx}")
+                else:
+                    print(f"[+] Multiple-face condition cleared at frame {frame_idx}")
 
-        if args.detect_multiple and multiple_faces != multi_face_active:
-            multi_face_active = multiple_faces
-            if multi_face_active:
-                print(f"[!] Multiple faces detected: {face_count} faces at frame {frame_idx}")
-            else:
-                print(f"[+] Multiple-face condition cleared at frame {frame_idx}")
+            if args.store_every > 0 and frame_idx % args.store_every == 0:
+                save_inference_image(
+                    run_dir,
+                    frame,
+                    detections,
+                    frame_idx,
+                    detect_multiple=args.detect_multiple,
+                    multi_face_min=args.multi_face_min,
+                )
 
-        # Offload save to background thread — no longer blocks the loop.
-        if args.store_every > 0 and frame_idx % args.store_every == 0:
-            enqueue_inference_image(
-                save_worker,
-                run_dir,
+            now = time.monotonic()
+            fps_buf.append(1.0 / max(now - prev_time, 1e-6))
+            prev_time = now
+            fps = sum(fps_buf) / len(fps_buf)
+
+            vis = draw_overlay(
                 frame,
                 detections,
-                frame_idx,
-                detect_multiple=args.detect_multiple,
-                multi_face_min=args.multi_face_min,
+                MODEL_NAME,
+                fps,
+                inf_ms,
+                controls_hint="s: Screenshot  q: Quit",
+                liveness_results=liveness_results if liveness_checker else None,
             )
 
-        now = time.perf_counter()
-        fps_buf.append(1.0 / max(now - prev_time, 1e-6))   # O(1) append
-        prev_time = now
-        fps = sum(fps_buf) / len(fps_buf)
+            if multiple_faces:
+                vis = draw_multi_face_warning(vis, face_count)
 
-        vis = draw_overlay(
-            frame,
-            detections,
-            MODEL_NAME,
-            fps,
-            inf_ms,
-            controls_hint="s: Screenshot  q: Quit",
-        )
+            cv2.imshow("SCRFD Face Detection", vis)
 
-        if multiple_faces:
-            vis = draw_multi_face_warning(vis, face_count)
+            if writer:
+                writer.write(vis)
 
-        cv2.imshow("SCRFD Face Detection", vis)
-
+            key = cv2.waitKey(1) & 0xFF
+            if key == ord("q"):
+                break
+            if key == ord("s"):
+                path = run_dir / f"screenshot_{screenshot_idx:04d}.jpg"
+                cv2.imwrite(str(path), vis, [cv2.IMWRITE_JPEG_QUALITY, 95])
+                print(f"[+] Screenshot saved: {path}")
+                screenshot_idx += 1
+    finally:
+        grabber.release()
         if writer:
-            writer.write(vis)
-
-        key = cv2.waitKey(1) & 0xFF
-
-        if key == ord("q"):
-            break
-
-        if key == ord("s"):
-            path = run_dir / f"screenshot_{screenshot_idx:04d}.jpg"
-            cv2.imwrite(str(path), vis, [cv2.IMWRITE_JPEG_QUALITY, 95])
-            print(f"[+] Screenshot saved: {path}")
-            screenshot_idx += 1
-
-    # ------- Cleanup -------------------------------------------------------
-    grabber.release()
-    save_worker.stop()
-
-    if writer:
-        writer.release()
-
-    cv2.destroyAllWindows()
-    print("[+] Done.")
+            writer.release()
+        cv2.destroyAllWindows()
+        print("[+] Done.")
 
 
 if __name__ == "__main__":
