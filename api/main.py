@@ -1,6 +1,9 @@
-import asyncio
 import os
+import signal
+import subprocess
+import sys
 from contextlib import asynccontextmanager
+from pathlib import Path
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -23,13 +26,24 @@ import firebase_admin
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from firebase_admin import credentials
+from api.middleware.request_counter import RequestCounterMiddleware
 from api.users.routes import router as users_router
 from api.solutions.routes import router as solutions_router
 from api.exams.routes import router as exams_router
 from api.leaderboard.routes import router as leaderboard_router
 from api.auth.routes import router as auth_router
-from api.media.routes import router as media_router
-from api.tags.routes import router as tags_router
+
+# Optional routers — may exist on production but not in local dev checkout
+try:
+    from api.media.routes import router as media_router
+except ModuleNotFoundError:
+    media_router = None
+
+try:
+    from api.tags.routes import router as tags_router
+except ModuleNotFoundError:
+    tags_router = None
+
 from api.proctoring.routes import router as proctoring_router
 
 
@@ -71,21 +85,33 @@ else:
     print(f"🔥 Using Firebase Emulator: {os.environ.get('FIRESTORE_EMULATOR_HOST')}")
 
 
+BACKEND_ROOT = Path(__file__).resolve().parent.parent
+WORKER_SCRIPT = BACKEND_ROOT / "workers" / "photo_analysis_worker.py"
+WORKER_SHUTDOWN_TIMEOUT_SECONDS = 30
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    loop = asyncio.get_event_loop()
-    from api.proctoring.worker import worker_loop
-    task = loop.create_task(worker_loop())
-    print("👁 Proctoring analysis worker started")
-    yield
-    from api.proctoring.worker import _running
-    _running = False
-    task.cancel()
+    proc = subprocess.Popen(
+        [sys.executable, str(WORKER_SCRIPT)],
+        cwd=str(BACKEND_ROOT),
+        env={**os.environ},
+    )
+    app.state.worker_proc = proc
+    print(f"👁 Photo analysis worker started (pid={proc.pid})")
     try:
-        await task
-    except asyncio.CancelledError:
-        pass
-    print("👁 Proctoring analysis worker stopped")
+        yield
+    finally:
+        try:
+            proc.send_signal(signal.SIGTERM)
+            proc.wait(timeout=WORKER_SHUTDOWN_TIMEOUT_SECONDS)
+        except subprocess.TimeoutExpired:
+            print(f"👁 Worker did not exit in {WORKER_SHUTDOWN_TIMEOUT_SECONDS}s, killing")
+            proc.kill()
+            proc.wait()
+        except Exception as e:
+            print(f"👁 Worker shutdown error: {e}")
+        print("👁 Photo analysis worker stopped")
 
 
 app = FastAPI(title="Face Quiz Backend", version="1.0.0", root_path="/api", lifespan=lifespan)
@@ -100,6 +126,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.add_middleware(RequestCounterMiddleware)
 
 # Routers
 app.include_router(users_router)
@@ -107,8 +134,10 @@ app.include_router(solutions_router)
 app.include_router(exams_router)
 app.include_router(leaderboard_router)
 app.include_router(auth_router)
-app.include_router(media_router)
-app.include_router(tags_router)
+if media_router:
+    app.include_router(media_router)
+if tags_router:
+    app.include_router(tags_router)
 app.include_router(proctoring_router)
 
 
