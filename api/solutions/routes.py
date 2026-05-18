@@ -9,7 +9,7 @@ from models.solutions import (
 from typing import List, Dict
 from collections import defaultdict
 
-router = APIRouter(prefix="/api/solutions", tags=["solutions"])
+router = APIRouter(prefix="/solutions", tags=["solutions"])
 
 # In-memory cache for exam results: {exam_id: {password: [ExamResultResponse]}}
 results_cache: Dict[str, Dict[str, List[ExamResultResponse]]] = defaultdict(dict)
@@ -130,13 +130,20 @@ async def get_users_with_scores(exam_id: str, password: str):
             
             percent = round((correct_count / total_tasks) * 100) if total_tasks > 0 else 0
             
-            # Get user data by email (document ID)
+            # User docs are inconsistently keyed across the codebase:
+            #   - api/users/routes.py:create_user stores at users/{username}
+            #   - other paths stored at users/{email} (legacy)
+            # Try doc-by-email first, then fall back to a query on the `email` field.
             user_doc = db.collection("users").document(email).get()
             if user_doc.exists:
                 user_data = user_doc.to_dict()
             else:
-                user_data = {}
-                print(f"DEBUG: User {email} not found in users collection")
+                user_query = list(db.collection("users").where("email", "==", email).limit(1).stream())
+                if user_query:
+                    user_data = user_query[0].to_dict()
+                else:
+                    user_data = {}
+                    print(f"DEBUG: User {email} not found in users collection")
             users_with_scores.append({
                 "email": email,
                 "username": user_data.get("username", ""),
