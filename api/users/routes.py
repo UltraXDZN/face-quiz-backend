@@ -2,7 +2,7 @@ import os
 from fastapi import APIRouter, HTTPException, status
 from google.cloud import firestore
 from google.auth.credentials import AnonymousCredentials
-from models.users import User, UserCreate, UserUpdate
+from models.users import User, UserCreate, UserUpdate, UserUISettings
 from typing import List
 # Import leaderboard update helper
 from api.leaderboard.routes import update_user_leaderboard_entry
@@ -31,7 +31,7 @@ async def get_all_users():
     try:
         db = get_db()
         users_ref = db.collection("users").stream()
-        users = [user.to_dict() for user in users_ref]
+        users = [User.model_validate(user.to_dict()) for user in users_ref]
         return users
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -49,7 +49,7 @@ async def get_user(email: str):
             user_doc = db.collection("users").document(email).get()
             if user_doc.exists:
                 print(f"✅ Found user by document ID: {email}")
-                return user_doc.to_dict()
+                return User.model_validate(user_doc.to_dict())
         except Exception as doc_error:
             print(f"⚠️ Could not get by document ID: {doc_error}")
         
@@ -62,7 +62,7 @@ async def get_user(email: str):
             raise HTTPException(status_code=404, detail="User not found")
         
         print(f"✅ Found user by query: {email}")
-        return users[0].to_dict()
+        return User.model_validate(users[0].to_dict())
     except HTTPException:
         raise
     except Exception as e:
@@ -92,7 +92,7 @@ async def create_user(user: UserCreate):
         }
         
         db.collection("users").document(user.username).set(user_data)
-        return user_data
+        return User.model_validate(user_data)
     except HTTPException:
         raise
     except Exception as e:
@@ -130,7 +130,7 @@ async def update_user(email: str, user_update: UserUpdate):
             except Exception as e:
                 print(f"Failed to update leaderboard for user {email}: {e}")
         
-        return user_data
+        return User.model_validate(user_data)
     except HTTPException:
         raise
     except Exception as e:
@@ -139,16 +139,88 @@ async def update_user(email: str, user_update: UserUpdate):
 
 @router.delete("/{email}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_user(email: str):
-    """Delete a user"""
+    """Delete a user and remove them from created-users tracking"""
     try:
         db = get_db()
-        # Check if user exists
-        user_doc = db.collection("users").document(email).get()
+        # Try document by email (used as doc ID) first
+        user_doc_ref = db.collection("users").document(email)
+        user_doc = user_doc_ref.get()
+
         if not user_doc.exists:
-            raise HTTPException(status_code=404, detail="User not found")
-        
-        db.collection("users").document(email).delete()
-        return "User deleted successfully"
+            # Fall back to querying by email field
+            user_query = db.collection("users").where("email", "==", email).stream()
+            users = list(user_query)
+            if not users:
+                raise HTTPException(status_code=404, detail="User not found")
+            user_doc_ref = db.collection("users").document(users[0].id)
+
+        # Delete the user document
+        user_doc_ref.delete()
+
+        # Remove the user from the created-users tracking map
+        data_ref = db.collection("data").document("users")
+        data_doc = data_ref.get()
+        if data_doc.exists:
+            data = data_doc.to_dict() or {}
+            if email in data.get("createdUsers", {}):
+                data_ref.update({f"createdUsers.{email}": firestore.DELETE_FIELD})
+
+        return None
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.put("/{email}", response_model=User)
+async def full_update_user(email: str, user_data: User):
+    """Full replacement of a user document (equivalent to Firestore setDoc)"""
+    try:
+        db = get_db()
+        # Try document by email (used as doc ID) first
+        user_doc_ref = db.collection("users").document(email)
+        user_doc = user_doc_ref.get()
+
+        if not user_doc.exists:
+            # Fall back to querying by email field
+            user_query = db.collection("users").where("email", "==", email).stream()
+            users = list(user_query)
+            if not users:
+                raise HTTPException(status_code=404, detail="User not found")
+            user_doc_ref = db.collection("users").document(users[0].id)
+
+        # Full replacement of the document
+        user_doc_ref.set(user_data.dict())
+
+        return user_data
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.put("/{email}/ui-settings")
+async def update_user_ui_settings(email: str, ui_settings: UserUISettings):
+    """Update user UI settings"""
+    try:
+        db = get_db()
+        # Try document by email first
+        user_doc_ref = db.collection("users").document(email)
+        user_doc = user_doc_ref.get()
+
+        if not user_doc.exists:
+            # Fall back to query
+            user_query = db.collection("users").where("email", "==", email).stream()
+            users = list(user_query)
+            if not users:
+                raise HTTPException(status_code=404, detail="User not found")
+            user_doc = users[0]
+            user_doc_ref = db.collection("users").document(user_doc.id)
+
+        # Update UISettings field
+        user_doc_ref.update({"UISettings": ui_settings.dict()})
+
+        return {"message": "UI settings updated successfully", "UISettings": ui_settings.dict()}
     except HTTPException:
         raise
     except Exception as e:

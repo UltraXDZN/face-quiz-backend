@@ -1,7 +1,13 @@
 import os
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, status, Query
+from fastapi.responses import JSONResponse, StreamingResponse
 from google.cloud import firestore
 from google.auth.credentials import AnonymousCredentials
+from io import BytesIO
+import zipfile
+import json
+import re
+import uuid
 from models.exams import (
     Exam, ShortExam, ExamPasswordsUpdate, ExamsDataResponse, ExamMetadata,
     ExamForStudent, GroupWithoutAnswers, TaskWithoutAnswer
@@ -30,6 +36,14 @@ async def create_exam(exam: Exam):
     """Create a new exam"""
     try:
         db = get_db()
+        
+        # Auto-generate missing IDs
+        for group in exam.groups:
+            if not group.id:
+                group.id = str(uuid.uuid4())
+            for task in group.tasks:
+                if not task.id:
+                    task.id = str(uuid.uuid4())
         
         # Check if password already exists
         data_doc = db.collection("data").document("exams").get()
@@ -156,7 +170,9 @@ async def get_exam_metadata(exam_id: str):
             timeLimit=exam_data.get("timeLimit"),
             activeExam=exam_data.get("activeExam"),
             shuffleQuestions=exam_data.get("shuffleQuestions"),
+            shuffleTasks=exam_data.get("shuffleTasks"),
             numberOfDisplayedQuestions=exam_data.get("numberOfDisplayedQuestions"),
+            numberOfDisplayedTasks=exam_data.get("numberOfDisplayedTasks"),
             accessLimit=exam_data.get("accessLimit"),
             startLimit=exam_data.get("startLimit"),
             endLimit=exam_data.get("endLimit")
@@ -168,8 +184,9 @@ async def get_exam_metadata(exam_id: str):
 
 
 @router.get("/{exam_id}/full", response_model=ExamForStudent)
-async def get_exam_full(exam_id: str):
-    """Get full exam with questions but WITHOUT correct answers (for started exams)"""
+async def get_exam_full(exam_id: str, email: str = Query(default="")):
+    """Get full exam with questions but WITHOUT correct answers (for started exams).
+    If shuffleQuestions is enabled, groups and tasks are shuffled deterministically per student email."""
     try:
         db = get_db()
         exam_doc = db.collection("exams").document(exam_id).get()
@@ -178,13 +195,53 @@ async def get_exam_full(exam_id: str):
             raise HTTPException(status_code=404, detail="Exam not found")
         
         exam_data = exam_doc.to_dict()
+        raw_groups = exam_data.get("groups", [])
+        shuffle_groups = exam_data.get("shuffleQuestions", False)
+        shuffle_tasks = exam_data.get("shuffleTasks", False)
+        num_displayed = exam_data.get("numberOfDisplayedQuestions")
+        num_tasks_displayed = exam_data.get("numberOfDisplayedTasks")
+        
+        # Prepare groups (shuffle if enabled)
+        prepared_groups = raw_groups
+        if shuffle_groups and email:
+            import random
+            seed = hash(email + exam_id) % (2**32)
+            rng = random.Random(seed)
+            prepared_groups = list(raw_groups)
+            rng.shuffle(prepared_groups)
+            if num_displayed is not None:
+                try:
+                    num_int = int(num_displayed)
+                    if num_int > 0:
+                        prepared_groups = prepared_groups[:num_int]
+                except (TypeError, ValueError):
+                    pass
         
         # Strip out the 'state' field from all tasks
         groups_without_answers = []
-        for group in exam_data.get("groups", []):
+        for group in prepared_groups:
+            raw_tasks = group.get("tasks", [])
+            
+            # Shuffle tasks within group if enabled (independent of group shuffle)
+            if shuffle_tasks and email:
+                import random
+                seed = hash(email + exam_id + group.get("id", "")) % (2**32)
+                rng = random.Random(seed)
+                tasks_list = list(raw_tasks)
+                rng.shuffle(tasks_list)
+                raw_tasks = tasks_list
+            
+            # Limit tasks per group if specified
+            if num_tasks_displayed is not None:
+                try:
+                    num_tasks_int = int(num_tasks_displayed)
+                    if num_tasks_int > 0:
+                        raw_tasks = raw_tasks[:num_tasks_int]
+                except (TypeError, ValueError):
+                    pass
+            
             tasks_without_answers = []
-            for task in group.get("tasks", []):
-                # Create task dict without state field
+            for task in raw_tasks:
                 task_without_answer = {
                     "id": task.get("id"),
                     "text": task.get("text"),
@@ -199,7 +256,7 @@ async def get_exam_full(exam_id: str):
             )
             groups_without_answers.append(group_without_answers)
         
-        # Return exam without correct answers
+        # Return exam
         return ExamForStudent(
             id=exam_data.get("id"),
             title=exam_data.get("title"),
@@ -209,7 +266,9 @@ async def get_exam_full(exam_id: str):
             timeLimit=exam_data.get("timeLimit"),
             activeExam=exam_data.get("activeExam"),
             shuffleQuestions=exam_data.get("shuffleQuestions"),
+            shuffleTasks=exam_data.get("shuffleTasks"),
             numberOfDisplayedQuestions=exam_data.get("numberOfDisplayedQuestions"),
+            numberOfDisplayedTasks=exam_data.get("numberOfDisplayedTasks"),
             accessLimit=exam_data.get("accessLimit"),
             startLimit=exam_data.get("startLimit"),
             endLimit=exam_data.get("endLimit"),
@@ -319,6 +378,66 @@ async def update_exam(exam_id: str, exam: Exam):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.post("/{exam_id}/duplicate", status_code=status.HTTP_201_CREATED)
+async def duplicate_exam(exam_id: str):
+    """Duplicate an existing exam with a new ID"""
+    try:
+        db = get_db()
+
+        # Get original exam
+        exam_ref = db.collection("exams").document(exam_id)
+        exam_doc = exam_ref.get()
+
+        if not exam_doc.exists:
+            raise HTTPException(status_code=404, detail="Exam not found")
+
+        exam_data = exam_doc.to_dict()
+
+        # Generate new ID
+        new_id = str(uuid.uuid4())
+
+        # Create new exam document with new ID
+        new_exam_data = {**exam_data, "id": new_id}
+        db.collection("exams").document(new_id).set(new_exam_data)
+
+        # Create new ShortExam and add to createdExams
+        new_short_exam = {
+            "id": new_id,
+            "title": exam_data.get("title", "") + " (kopija)",
+            "creator": exam_data.get("creator"),
+            "timestamp": exam_data.get("timestamp"),
+            "password": exam_data.get("password", ""),
+            "accessLimit": exam_data.get("accessLimit", False),
+            "timeLimit": exam_data.get("timeLimit", 1),
+            "startLimit": exam_data.get("startLimit", None),
+            "endLimit": exam_data.get("endLimit", None),
+            "version": 0
+        }
+
+        data_ref = db.collection("data").document("exams")
+        data_ref.update({
+            "createdExams": firestore.ArrayUnion([new_short_exam])
+        })
+
+        # Also copy the password entry
+        data_doc = db.collection("data").document("exams").get()
+        if data_doc.exists:
+            data = data_doc.to_dict()
+            exam_passwords = data.get("examPasswords", {})
+            if exam_id in exam_passwords:
+                data_ref.set({
+                    "examPasswords": {
+                        new_id: exam_passwords[exam_id]
+                    }
+                }, merge=True)
+
+        return {"message": "Exam duplicated successfully", "newExamId": new_id}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.delete("/{exam_id}")
 async def delete_exam(exam_id: str):
     """Delete an exam"""
@@ -359,6 +478,79 @@ async def delete_exam(exam_id: str):
         db.collection("exams").document(exam_id).delete()
         
         return {"message": "Exam deleted successfully"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+def _sanitize_filename(value: str) -> str:
+    value = re.sub(r"[^\w\-.]+", "_", value.strip(), flags=re.UNICODE)
+    return value.strip("._") or "group"
+
+
+def _split_task_text(task_text: str):
+    marker = "(Pojašnjenje"
+    if marker not in task_text:
+        return task_text.strip(), ""
+    statement, explanation = task_text.split(marker, 1)
+    return statement.strip(), f"{marker}{explanation}".strip()
+
+
+def _build_group_markdown(group: dict) -> str:
+    lines = []
+    group_text = str(group.get("text", "") or "").strip()
+    if group_text:
+        lines.append(group_text)
+        lines.append("")
+
+    for task in group.get("tasks", []) or []:
+        statement, explanation = _split_task_text(str(task.get("text", "") or ""))
+        correctness = "Točno" if task.get("state") else "Netočno"
+        explanation_text = f" {explanation}" if explanation else ""
+        lines.append(f"1. {statement} [{correctness}] {explanation_text}".rstrip())
+
+    return "\n".join(lines).strip()
+
+
+@router.get("/{exam_id}/export")
+async def export_exam(exam_id: str, format: str = Query(default="json")):
+    """Export an exam as JSON or as a zip of Markdown group files"""
+    try:
+        db = get_db()
+        exam_doc = db.collection("exams").document(exam_id).get()
+
+        if not exam_doc.exists:
+            raise HTTPException(status_code=404, detail="Exam not found")
+
+        exam_data = exam_doc.to_dict()
+
+        if format.lower() == "md":
+            buffer = BytesIO()
+            exam_title = _sanitize_filename(str(exam_data.get("title", "exam")))
+            with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+                groups = exam_data.get("groups", []) or []
+                for index, group in enumerate(groups, start=1):
+                    group_title = _sanitize_filename(str(group.get("text", f"group_{index}"))[:60])
+                    filename = f"{index:02d}_{group_title or 'group'}.md"
+                    zf.writestr(filename, _build_group_markdown(group))
+
+            buffer.seek(0)
+            return StreamingResponse(
+                buffer,
+                media_type="application/zip",
+                headers={
+                    "Content-Disposition": f"attachment; filename={exam_title}_{exam_id}_md.zip",
+                },
+            )
+
+        return JSONResponse(
+            content=exam_data,
+            headers={
+                "Content-Disposition": f"attachment; filename=exam_{exam_id}.json",
+                "Content-Type": "application/json",
+            }
+        )
     except HTTPException:
         raise
     except Exception as e:

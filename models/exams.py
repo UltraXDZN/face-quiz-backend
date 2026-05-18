@@ -1,5 +1,6 @@
 from pydantic import BaseModel
 from typing import List, Dict, Optional
+import uuid
 
 
 class Task(BaseModel):
@@ -19,7 +20,7 @@ class TaskWithoutAnswer(BaseModel):
 
 
 class Group(BaseModel):
-    id: str
+    id: Optional[str] = None
     text: str  # Changed from name to text
     tasks: List[Task]
 
@@ -50,8 +51,10 @@ class Exam(BaseModel):
     lastUpdatedBy: Optional[str] = None
     createdBy: Optional[str] = None
     numberOfDisplayedQuestions: Optional[int] = None
+    numberOfDisplayedTasks: Optional[int] = None
     activeExam: Optional[bool] = None
     shuffleQuestions: Optional[bool] = None
+    shuffleTasks: Optional[bool] = None
 
 
 class ExamForStudent(BaseModel):
@@ -73,8 +76,10 @@ class ExamForStudent(BaseModel):
     lastUpdatedBy: Optional[str] = None
     createdBy: Optional[str] = None
     numberOfDisplayedQuestions: Optional[int] = None
+    numberOfDisplayedTasks: Optional[int] = None
     activeExam: Optional[bool] = None
     shuffleQuestions: Optional[bool] = None
+    shuffleTasks: Optional[bool] = None
 
 
 class ShortExam(BaseModel):
@@ -99,7 +104,9 @@ class ExamMetadata(BaseModel):
     timeLimit: Optional[int] = None
     activeExam: Optional[bool] = None
     shuffleQuestions: Optional[bool] = None
+    shuffleTasks: Optional[bool] = None
     numberOfDisplayedQuestions: Optional[int] = None
+    numberOfDisplayedTasks: Optional[int] = None
     accessLimit: Optional[bool] = None
     startLimit: Optional[int] = None
     endLimit: Optional[int] = None

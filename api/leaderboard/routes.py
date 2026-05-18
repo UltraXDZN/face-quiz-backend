@@ -1,9 +1,9 @@
 import os
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, Query
 from google.cloud import firestore
 from google.auth.credentials import AnonymousCredentials
 from models.leaderboard import LeaderboardData, LeaderboardUpdateRequest, LeaderboardEntry
-from typing import Dict
+from typing import Dict, List, Set
 
 router = APIRouter(prefix="/leaderboard", tags=["leaderboard"])
 
@@ -21,8 +21,8 @@ def get_db():
 
 
 @router.get("/", response_model=LeaderboardData)
-async def get_leaderboard():
-    """Get the current leaderboard"""
+async def get_leaderboard(tags: List[str] = Query(default=[])):
+    """Get the current leaderboard, optionally filtered by user tags."""
     try:
         db = get_db()
         leaderboard_doc = db.collection("data").document("leaderboard").get()
@@ -32,10 +32,24 @@ async def get_leaderboard():
         
         data = leaderboard_doc.to_dict()
         raw_leaderboard = data.get("leaderboard", {})
+
+        allowed_jmbags: Set[str] | None = None
+        if tags:
+            tags_set = set(tags)
+            allowed_jmbags = set()
+            for user_doc in db.collection("users").stream():
+                user_data = user_doc.to_dict()
+                user_tags = set(user_data.get("tags", []))
+                if tags_set.intersection(user_tags):
+                    jmbag = user_data.get("jmbag")
+                    if jmbag:
+                        allowed_jmbags.add(jmbag)
         
         # Validate and clean the data
         cleaned_leaderboard = {}
         for key, value in raw_leaderboard.items():
+            if allowed_jmbags is not None and key not in allowed_jmbags:
+                continue
             try:
                 # Ensure totalPoints is a number
                 total_points = value.get("totalPoints", 0)

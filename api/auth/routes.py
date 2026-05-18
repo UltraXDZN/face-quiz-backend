@@ -35,7 +35,7 @@ async def google_login():
     state = secrets.token_urlsafe(32)
     state_tokens[state] = True
     
-    redirect_uri = f"{BACKEND_URL}/api/auth/google/callback"
+    redirect_uri = f"{BACKEND_URL}/auth/google/callback"
     google_auth_url = (
         f"https://accounts.google.com/o/oauth2/v2/auth?"
         f"client_id={GOOGLE_CLIENT_ID}&"
@@ -60,7 +60,7 @@ async def google_callback(code: str, state: str):
     try:
         # Exchange code for tokens
         token_url = "https://oauth2.googleapis.com/token"
-        redirect_uri = f"{BACKEND_URL}/api/auth/google/callback"
+        redirect_uri = f"{BACKEND_URL}/auth/google/callback"
         
         async with httpx.AsyncClient() as client:
             response = await client.post(
