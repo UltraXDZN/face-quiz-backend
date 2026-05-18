@@ -41,6 +41,7 @@ class User(BaseModel):
     year: str
     type: str
     admin: bool = False
+    google_uid: Optional[str] = None
     tags: List[str] = Field(default_factory=list)
     acessedExams: List[AccessedExam] = Field(default_factory=list)
     UISettings: Optional[UserUISettings] = None
@@ -55,6 +56,7 @@ class UserCreate(BaseModel):
     year: str
     type: str
     photoURL: Optional[str] = None
+    google_uid: Optional[str] = None
 
 
 class UserUpdate(BaseModel):

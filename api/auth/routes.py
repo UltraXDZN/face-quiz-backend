@@ -96,7 +96,10 @@ async def google_callback(code: str, state: str):
         jwt_token = create_access_token({
             "email": user_data.get("email"),
             "name": user_data.get("name"),
+            "given_name": user_data.get("given_name", ""),
+            "family_name": user_data.get("family_name", ""),
             "picture": user_data.get("picture"),
+            "google_id": user_data.get("id"),
         })
         
         # Redirect to frontend with token

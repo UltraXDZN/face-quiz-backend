@@ -1,12 +1,21 @@
 import os
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, status, Header
 from google.cloud import firestore
 from google.auth.credentials import AnonymousCredentials
 from models.users import User, UserCreate, UserUpdate, UserUISettings
-from typing import List
+from typing import List, Optional
 # Import leaderboard update helper
 from api.leaderboard.routes import update_user_leaderboard_entry
 router = APIRouter(prefix="/users", tags=["users"])
+
+
+def _verify_jwt(authorization: Optional[str]) -> dict:
+    """Verify our custom JWT from Authorization: Bearer <token> header."""
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing or invalid Authorization header")
+    token = authorization[7:]
+    from api.auth.routes import verify_token
+    return verify_token(token)
 
 
 def get_db():
@@ -33,6 +42,33 @@ async def get_all_users():
         users_ref = db.collection("users").stream()
         users = [User.model_validate(user.to_dict()) for user in users_ref]
         return users
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/by-uid/{google_uid}", response_model=User)
+async def get_user_by_uid(google_uid: str, authorization: Optional[str] = Header(None)):
+    """Look up user by Google UID (from JWT). Requires valid JWT."""
+    _verify_jwt(authorization)
+    try:
+        db = get_db()
+        docs = list(db.collection("users").where("google_uid", "==", google_uid).limit(1).stream())
+        if not docs:
+            raise HTTPException(status_code=404, detail="User not found")
+        return User.model_validate(docs[0].to_dict())
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/check-username/{username}")
+async def check_username(username: str):
+    """Check if a username is available. Public endpoint."""
+    try:
+        db = get_db()
+        docs = list(db.collection("users").where("username", "==", username).limit(1).stream())
+        return {"available": len(docs) == 0}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -73,18 +109,21 @@ async def get_user(email: str):
 
 
 @router.post("/", response_model=User, status_code=status.HTTP_201_CREATED)
-async def create_user(user: UserCreate):
-    """Create a new user"""
+async def create_user(user: UserCreate, authorization: Optional[str] = Header(None)):
+    """Create a new user. Requires valid JWT."""
+    decoded = _verify_jwt(authorization)
+    google_uid = decoded.get("google_id") or user.google_uid
     try:
         db = get_db()
         # Check if user already exists
         existing = db.collection("users").where("username", "==", user.username).stream()
         if any(existing):
             raise HTTPException(status_code=400, detail="Username already exists")
-        
+
         # Create new user document
         user_data = {
             **user.dict(),
+            "google_uid": google_uid,
             "creationYear": 2025,
             "admin": False,
             "tags": [],
