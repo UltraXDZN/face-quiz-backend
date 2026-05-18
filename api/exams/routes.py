@@ -8,7 +8,7 @@ from models.exams import (
 )
 from typing import List
 
-router = APIRouter(prefix="/api/exams", tags=["exams"])
+router = APIRouter(prefix="/exams", tags=["exams"])
 
 
 def get_db():
