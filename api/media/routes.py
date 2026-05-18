@@ -6,16 +6,27 @@ from fastapi.responses import StreamingResponse
 from io import BytesIO
 import cv2
 import numpy as np
-from api.media.face_detection import detect_faces
+
+try:
+    from api.media.face_detection import detect_faces
+except ModuleNotFoundError:
+    detect_faces = None  # dev stub, face detection unavailable
+
+# Photo-analysis runs as a separate worker process that discovers new
+# camera frames via S3 scan; no per-upload enqueue call needed here.
 
 # Load config from environment
 AWS_ACCESS_KEY = os.getenv("AWS_ACCESS_KEY_ID")
 AWS_SECRET_KEY = os.getenv("AWS_SECRET_ACCESS_KEY")
 AWS_REGION = os.getenv("AWS_REGION")
-BUCKET_NAME = os.getenv("S3_BUCKET_NAME")
+BUCKET_NAME = os.getenv("S3_BUCKET_NAME", "face-quiz-media")
 
-# Create S3 client
-s3_client = boto3.client("s3", aws_access_key_id=AWS_ACCESS_KEY, aws_secret_access_key=AWS_SECRET_KEY, region_name=AWS_REGION)
+s3_client = boto3.client(
+    "s3",
+    aws_access_key_id=AWS_ACCESS_KEY,
+    aws_secret_access_key=AWS_SECRET_KEY,
+    region_name=AWS_REGION,
+)
 
 router = APIRouter(prefix="/media", tags=["media"])
 
@@ -27,9 +38,7 @@ async def upload_capture(screenshot_file: UploadFile = File(...),
     email: str = Form(...),
     timestamp_str: str = Form(None),
 ):
-    """Upload a screenshot and camera capture into a common timestamp folder.
-    If timestamp_str is provided, the file is stored in that timestamp folder;
-    otherwise a new timestamp (ms) is generated and returned so clients can reuse it."""
+    """Upload a screenshot and camera capture into a common timestamp folder."""
     try:
         screenshot = await screenshot_file.read()
         camera = await camera_file.read()
@@ -41,12 +50,14 @@ async def upload_capture(screenshot_file: UploadFile = File(...),
         else:
             timestamp = int(time.time() * 1000)
 
-        # Sanitise email for use as a path segment
         safe_email = email.replace("@", "_at_").replace(".", "_")
 
-        s3_client.put_object(Bucket=BUCKET_NAME, Key=f"{exam_id}/{safe_email}/{timestamp}/screenshot.png", Body=screenshot, ContentType=(screenshot_file.content_type or "image/png"))
-        s3_client.put_object(Bucket=BUCKET_NAME, Key=f"{exam_id}/{safe_email}/{timestamp}/camera.png", Body=camera, ContentType=(camera_file.content_type or "image/png"))
-        
+        screenshot_key = f"{exam_id}/{safe_email}/{timestamp}/screenshot.png"
+        camera_key = f"{exam_id}/{safe_email}/{timestamp}/camera.png"
+
+        s3_client.put_object(Bucket=BUCKET_NAME, Key=screenshot_key, Body=screenshot, ContentType=(screenshot_file.content_type or "image/png"))
+        s3_client.put_object(Bucket=BUCKET_NAME, Key=camera_key, Body=camera, ContentType=(camera_file.content_type or "image/png"))
+
         return {"message": "Upload successful", "timestamp": timestamp}
     except HTTPException:
         raise
@@ -56,12 +67,9 @@ async def upload_capture(screenshot_file: UploadFile = File(...),
 
 @router.get("/screenshots")
 async def list_screenshots(request: Request, exam_id: str, email: str = Query(None)):
-    """List screenshots for an exam with timestamps, optionally filtered by student email.
-    Each entry contains timestamp, screenshot_url and camera_url (when available)."""
+    """List screenshots for an exam with timestamps."""
     try:
-        # Get base URL from request
         base_url = str(request.base_url).rstrip("/")
-        
         prefix = f"{exam_id}/"
         if email:
             safe_email = email.replace("@", "_at_").replace(".", "_")
@@ -75,7 +83,7 @@ async def list_screenshots(request: Request, exam_id: str, email: str = Query(No
                 parts = key.split("/")
                 if len(parts) >= 3:
                     timestamp = parts[-2]
-                    base_path = "/".join(parts[:-1])  # exam_id/safe_email/timestamp
+                    base_path = "/".join(parts[:-1])
                     entry = items.setdefault(timestamp, {
                         "timestamp": timestamp,
                         "screenshot_url": None,
@@ -125,6 +133,8 @@ async def get_camera(exam_id: str, safe_email: str, timestamp: str):
 async def face_check(image: UploadFile = File(...), confidence: float = Form(0.5)):
     """Detect face(s) from a single camera frame."""
     try:
+        if detect_faces is None:
+            raise HTTPException(status_code=500, detail="Face detection not configured")
         image_bytes = await image.read()
         np_buffer = np.frombuffer(image_bytes, np.uint8)
         frame = cv2.imdecode(np_buffer, cv2.IMREAD_COLOR)
