@@ -9,3 +9,4 @@ serviceAccountKey.json
 workers/queue.json
 workers/worker-state.json
 workers/worker.log
+workers/worker-state.json
