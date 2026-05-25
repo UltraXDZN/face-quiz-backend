@@ -65,3 +65,4 @@ class UserUpdate(BaseModel):
     photoURL: Optional[str] = None
     year: Optional[str] = None
     tags: Optional[List[str]] = None
+    google_uid: Optional[str] = None
