@@ -19,9 +19,10 @@ class UserSolutionResponse(BaseModel):
     username: str
     name: str
     surname: str
-    percent: int
+    percent: str
     creationYear: int
     admin: bool
+    jmbag: str = ""
 
 class Solution(BaseModel):
     id: str
