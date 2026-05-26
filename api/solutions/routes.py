@@ -131,16 +131,21 @@ async def get_users_with_scores(exam_id: str, password: str):
             percent = round((correct_count / total_tasks) * 100) if total_tasks > 0 else 0
             
             # User docs are inconsistently keyed across the codebase:
-            #   - api/users/routes.py:create_user stores at users/{username}
+            #   - api/users/routes.py:create_user stores at users/{username} where username = email local part
             #   - other paths stored at users/{email} (legacy)
-            # Try doc-by-email first, then fall back to a query on the `email` field.
-            user_doc = db.collection("users").document(email).get()
+            # Try username-keyed doc first (modern scheme), then email-keyed, then a query.
+            username_guess = email.split("@")[0]
+            user_doc = db.collection("users").document(username_guess).get()
+            if not user_doc.exists:
+                user_doc = db.collection("users").document(email).get()
             if user_doc.exists:
                 user_data = user_doc.to_dict()
+                print(f"DEBUG: Found user {email} at doc id {user_doc.id!r}, jmbag={user_data.get('jmbag', '<MISSING>')!r}")
             else:
                 user_query = list(db.collection("users").where("email", "==", email).limit(1).stream())
                 if user_query:
                     user_data = user_query[0].to_dict()
+                    print(f"DEBUG: Found user {email} via email query at doc id {user_query[0].id!r}, jmbag={user_data.get('jmbag', '<MISSING>')!r}")
                 else:
                     user_data = {}
                     print(f"DEBUG: User {email} not found in users collection")
@@ -149,10 +154,12 @@ async def get_users_with_scores(exam_id: str, password: str):
                 "username": user_data.get("username", ""),
                 "name": user_data.get("name", ""),
                 "surname": user_data.get("surname", ""),
-                "percent": percent,
+                "percent": f"{percent * 100 / 100}%",
                 "creationYear": user_data.get("creationYear", 0),
-                "admin": user_data.get("admin", False)
+                "admin": user_data.get("admin", False),
+                "jmbag": user_data.get("jmbag", "")
             })
+            print(f"DEBUG: Added user {email} with percent {percent}% to results", user_data)
         
         print(f"DEBUG: Returning {len(users_with_scores)} users with scores")
         return users_with_scores
