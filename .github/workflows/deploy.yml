@@ -46,3 +46,7 @@
                 -v /home/jcrljenko/facequiz-backend/face-quiz-backend/serviceAccountKey.json:/app/serviceAccountKey.json:ro \
                 -p 8000:8000 \
                 ${{ env.IMAGE_NAME }}:latest
+
+              # Reclaim disk by removing the previous :latest image, which becomes
+              # a dangling (untagged) layer after the new pull above.
+              docker image prune -f

@@ -19,7 +19,7 @@ class UserSolutionResponse(BaseModel):
     username: str
     name: str
     surname: str
-    percent: str
+    percent: float
     creationYear: int
     admin: bool
     jmbag: str = ""
