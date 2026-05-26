@@ -48,5 +48,8 @@
                 ${{ env.IMAGE_NAME }}:latest
 
               # Reclaim disk by removing the previous :latest image, which becomes
-              # a dangling (untagged) layer after the new pull above.
+              # a dangling (untagged) layer after the new pull above. Also prune
+              # build cache — even though we pull pre-built images, any local
+              # builds (debug, ad-hoc) leave cache layers behind indefinitely.
               docker image prune -f
+              docker builder prune -af
