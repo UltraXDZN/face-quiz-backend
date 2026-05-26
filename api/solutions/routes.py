@@ -101,35 +101,34 @@ async def get_users_with_scores(exam_id: str, password: str):
         
         # Get all solutions for this exam
         solutions_ref = db.collection("solutions").document(exam_id).collection(password).stream()
-        
         solutions_list = list(solutions_ref)
-        print(f"DEBUG: Found {len(solutions_list)} solutions for exam {exam_id}/{password}")
-        
-        # Calculate total tasks from exam data
-        groups = exam_data.get("groups", [])
-        total_tasks = sum(len(group.get("tasks", [])) for group in groups)
-        flat_tasks = [task for group in groups for task in group.get("tasks", [])]
-        
-        print(f"DEBUG: Total tasks: {total_tasks}, flat_tasks: {len(flat_tasks)}")
-        print(f"DEBUG: Exam groups: {len(groups)}")
-        
+
+        # Flatten exam tasks and precompute the total points denominator once.
+        flat_tasks = [task for group in exam_data.get("groups", []) for task in group.get("tasks", [])]
+        total_points = sum(task.get("positive_points", 1.0) for task in flat_tasks)
+
         users_with_scores = []
-        
+
         for solution_doc in solutions_list:
             email = solution_doc.id
-            solution_data = solution_doc.to_dict()
-            solutions = solution_data.get("solutions", [])
-            
-            print(f"DEBUG: Processing email {email} with {len(solutions)} solutions")
-            
-            # Calculate correct answers
-            correct_count = 0
-            for i, sol in enumerate(solutions):
-                if i < len(flat_tasks) and sol.get("state") == flat_tasks[i].get("state"):
-                    correct_count += 1
-            
-            percent = round((correct_count / total_tasks) * 100) if total_tasks > 0 else 0
-            
+            user_solutions = solution_doc.to_dict().get("solutions", [])
+
+            # Points-based score: must mirror _calculate_user_results so the percent
+            # field stays consistent with everything else in the app
+            # (admin Rezultati list, exam result page, CSV export).
+            solution_map = {sol["id"]: sol.get("state") for sol in user_solutions if "id" in sol}
+            achieved_points = 0.0
+            for task in flat_tasks:
+                user_answer = solution_map.get(task.get("id"))
+                if user_answer is None:
+                    continue
+                if user_answer == task.get("state"):
+                    achieved_points += task.get("positive_points", 1.0)
+                else:
+                    achieved_points -= task.get("negative_points", 0.3)
+            achieved_points = max(0.0, achieved_points)
+            percent = (achieved_points / total_points * 100) if total_points > 0 else 0.0
+
             # User docs are inconsistently keyed across the codebase:
             #   - api/users/routes.py:create_user stores at users/{username} where username = email local part
             #   - other paths stored at users/{email} (legacy)
@@ -140,28 +139,21 @@ async def get_users_with_scores(exam_id: str, password: str):
                 user_doc = db.collection("users").document(email).get()
             if user_doc.exists:
                 user_data = user_doc.to_dict()
-                print(f"DEBUG: Found user {email} at doc id {user_doc.id!r}, jmbag={user_data.get('jmbag', '<MISSING>')!r}")
             else:
                 user_query = list(db.collection("users").where("email", "==", email).limit(1).stream())
-                if user_query:
-                    user_data = user_query[0].to_dict()
-                    print(f"DEBUG: Found user {email} via email query at doc id {user_query[0].id!r}, jmbag={user_data.get('jmbag', '<MISSING>')!r}")
-                else:
-                    user_data = {}
-                    print(f"DEBUG: User {email} not found in users collection")
+                user_data = user_query[0].to_dict() if user_query else {}
+
             users_with_scores.append({
                 "email": email,
                 "username": user_data.get("username", ""),
                 "name": user_data.get("name", ""),
                 "surname": user_data.get("surname", ""),
-                "percent": f"{percent * 100 / 100}%",
+                "percent": percent,
                 "creationYear": user_data.get("creationYear", 0),
                 "admin": user_data.get("admin", False),
                 "jmbag": user_data.get("jmbag", "")
             })
-            print(f"DEBUG: Added user {email} with percent {percent}% to results", user_data)
-        
-        print(f"DEBUG: Returning {len(users_with_scores)} users with scores")
+
         return users_with_scores
     except HTTPException:
         raise
