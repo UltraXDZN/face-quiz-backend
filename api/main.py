@@ -32,6 +32,7 @@ from api.solutions.routes import router as solutions_router
 from api.exams.routes import router as exams_router
 from api.leaderboard.routes import router as leaderboard_router
 from api.auth.routes import router as auth_router
+from api.live.session import LiveSessionRegistry, BroadcastHub, Reaper
 
 # Optional routers — may exist on production but not in local dev checkout
 try:
@@ -99,9 +100,23 @@ async def lifespan(app: FastAPI):
     )
     app.state.worker_proc = proc
     print(f"👁 Photo analysis worker started (pid={proc.pid})")
+
+    # Live exam monitoring primitives. Routes added in BE-2/BE-3 reach
+    # these via `request.app.state.live_*`.
+    app.state.live_registry = LiveSessionRegistry()
+    app.state.live_hub = BroadcastHub()
+    app.state.live_reaper = Reaper(app.state.live_registry, app.state.live_hub)
+    app.state.live_reaper.start()
+    print("📡 Live session reaper started")
+
     try:
         yield
     finally:
+        try:
+            await app.state.live_reaper.stop()
+            print("📡 Live session reaper stopped")
+        except Exception as e:
+            print(f"📡 Live reaper shutdown error: {e}")
         try:
             proc.send_signal(signal.SIGTERM)
             proc.wait(timeout=WORKER_SHUTDOWN_TIMEOUT_SECONDS)
