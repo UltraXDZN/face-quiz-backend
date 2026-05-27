@@ -52,11 +52,17 @@ class LiveSession:
     email: str
     answers: dict[str, bool | None] = field(default_factory=dict)
     last_seen: float = field(default_factory=time.time)
+    # Separate from `last_seen` so the rate-limit check can't trip on the
+    # very first heartbeat after a fresh `get_or_create`.
+    last_heartbeat: float = 0.0
     status: LiveStatus = "solving"
     achieved_points: float = 0.0
     total_points: float = 0.0
     current_group: int = 1
     answered_count: int = 0
+    # Set on any mutation; cleared by the flusher after a successful write.
+    dirty: bool = False
+    last_flushed_at: float = 0.0
     # Per-session write lock — held by anyone mutating answers/score so the
     # reaper and request handlers don't trample each other.
     lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False)
