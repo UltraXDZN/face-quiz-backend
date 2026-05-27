@@ -32,9 +32,6 @@ from api.solutions.routes import router as solutions_router
 from api.exams.routes import router as exams_router
 from api.leaderboard.routes import router as leaderboard_router
 from api.auth.routes import router as auth_router
-from api.live.session import LiveSessionRegistry, BroadcastHub, Reaper
-from api.live.persistence import LiveFlusher, make_firestore_flush_fn
-from api.live.routes import router as live_router
 
 # Optional routers — may exist on production but not in local dev checkout
 try:
@@ -102,35 +99,9 @@ async def lifespan(app: FastAPI):
     )
     app.state.worker_proc = proc
     print(f"👁 Photo analysis worker started (pid={proc.pid})")
-
-    # Live exam monitoring primitives. Routes reach these via
-    # `request.app.state.live_*`.
-    from api.solutions.routes import get_db as get_solutions_db
-
-    app.state.live_registry = LiveSessionRegistry()
-    app.state.live_hub = BroadcastHub()
-    app.state.live_exam_cache = {}
-    app.state.live_reaper = Reaper(app.state.live_registry, app.state.live_hub)
-    app.state.live_flusher = LiveFlusher(
-        app.state.live_registry, make_firestore_flush_fn(get_solutions_db)
-    )
-    app.state.live_reaper.start()
-    app.state.live_flusher.start()
-    print("📡 Live session reaper + flusher started")
-
     try:
         yield
     finally:
-        try:
-            await app.state.live_flusher.stop()
-            print("📡 Live session flusher stopped")
-        except Exception as e:
-            print(f"📡 Live flusher shutdown error: {e}")
-        try:
-            await app.state.live_reaper.stop()
-            print("📡 Live session reaper stopped")
-        except Exception as e:
-            print(f"📡 Live reaper shutdown error: {e}")
         try:
             proc.send_signal(signal.SIGTERM)
             proc.wait(timeout=WORKER_SHUTDOWN_TIMEOUT_SECONDS)
@@ -168,7 +139,6 @@ if media_router:
 if tags_router:
     app.include_router(tags_router)
 app.include_router(proctoring_router)
-app.include_router(live_router)
 
 
 @app.get("/")
