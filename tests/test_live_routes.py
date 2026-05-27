@@ -132,6 +132,15 @@ def test_answers_diff_update_preserves_existing(app_and_state):
     assert session.achieved_points == 4.0
 
 
+def test_format_sse_helper_wire_format():
+    from api.live.routes import _format_sse
+
+    out = _format_sse("presence", {"email": "a@x", "status": "solving"})
+    assert out.startswith("event: presence\n")
+    assert 'data: {"email": "a@x", "status": "solving"}\n' in out
+    assert out.endswith("\n\n")
+
+
 def test_answers_returns_404_for_unknown_exam(app_and_state):
     app, state = app_and_state
     client = TestClient(app)

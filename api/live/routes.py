@@ -10,10 +10,12 @@ Admin read endpoints (the SSE stream) land in a separate file in BE-3.
 from __future__ import annotations
 
 import asyncio
+import json
 import time
-from typing import Optional
+from typing import AsyncIterator, Optional
 
 from fastapi import APIRouter, HTTPException, Request, status
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from api.live.scoring import compute_live_score
@@ -24,6 +26,10 @@ router = APIRouter(prefix="/live", tags=["live"])
 
 
 HEARTBEAT_MIN_INTERVAL_SECONDS = 1.0
+# How long to wait on the broadcast queue before emitting a keep-alive
+# comment. Has to be shorter than any proxy idle timeout in front of us
+# (nginx default is 60s; we keep a comfortable margin).
+SSE_KEEPALIVE_SECONDS = 15.0
 
 
 class HeartbeatRequest(BaseModel):
@@ -148,4 +154,75 @@ async def update_answers(
     )
     await hub.publish(
         exam_id, password, BroadcastEvent(type="presence", data=presence_payload)
+    )
+
+
+def _format_sse(event_type: str, data: dict) -> str:
+    """Encode an event for the SSE wire format."""
+    return f"event: {event_type}\ndata: {json.dumps(data)}\n\n"
+
+
+async def build_event_stream(
+    registry,
+    hub,
+    exam_id: str,
+    password: str,
+    is_disconnected,
+    keepalive_seconds: float = SSE_KEEPALIVE_SECONDS,
+) -> AsyncIterator[str]:
+    """Yield SSE-formatted lines for the (exam, password) channel.
+
+    Factored out of the route handler so it can be driven directly from
+    tests without going through `TestClient.stream` (which doesn't tear
+    down a long-lived SSE response cleanly).
+
+    `is_disconnected` is an async callable returning `True` when the
+    client has gone away. In production this is `request.is_disconnected`;
+    tests pass a fake.
+    """
+    queue = await hub.subscribe(exam_id, password)
+    try:
+        # Snapshot — send the current state of every existing session so a
+        # late-joining admin doesn't have to wait for the next mutation.
+        for session in registry.list_for(exam_id, password):
+            yield _format_sse("presence", session.presence_payload())
+            yield _format_sse("score", session.score_payload())
+
+        while True:
+            if await is_disconnected():
+                break
+            try:
+                event = await asyncio.wait_for(queue.get(), timeout=keepalive_seconds)
+                yield _format_sse(event.type, event.data)
+            except asyncio.TimeoutError:
+                yield ": keep-alive\n\n"
+    finally:
+        await hub.unsubscribe(exam_id, password, queue)
+
+
+@router.get("/{exam_id}/{password}/stream")
+async def admin_stream(exam_id: str, password: str, request: Request):
+    """SSE stream of live presence + score events for the (exam, password) channel.
+
+    Admin-only by intent; like the rest of this backend (see
+    `api/proctoring/routes.py`) the gate is enforced by the frontend admin
+    middleware. Worth tightening server-side eventually, but out of scope
+    here.
+    """
+    return StreamingResponse(
+        build_event_stream(
+            request.app.state.live_registry,
+            request.app.state.live_hub,
+            exam_id,
+            password,
+            request.is_disconnected,
+        ),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            # Disable nginx response buffering so events are flushed
+            # immediately on this stream.
+            "X-Accel-Buffering": "no",
+        },
     )
