@@ -11,6 +11,7 @@ no PENDING items left).
 Run standalone:
     python workers/photo_analysis_worker.py
 """
+
 from __future__ import annotations
 
 import json
@@ -49,16 +50,16 @@ from google.auth.credentials import AnonymousCredentials  # noqa: E402
 # --------------------------------------------------------------------------- #
 # Tunables — all named constants, no magic numbers.
 # --------------------------------------------------------------------------- #
-CPU_IDLE_THRESHOLD = 10.0           # percent (1-second average)
-MEMORY_INCREASE_THRESHOLD = 5.0    # percent above baseline captured at startup
-REQUEST_IDLE_THRESHOLD = 1         # requests per minute
+CPU_IDLE_THRESHOLD = 10.0  # percent (1-second average)
+MEMORY_INCREASE_THRESHOLD = 5.0  # percent above baseline captured at startup
+REQUEST_IDLE_THRESHOLD = 1  # requests per minute
 
 POLL_INTERVAL_SECONDS = 10
-CPU_SAMPLE_SECONDS = 1.0           # psutil.cpu_percent() blocking interval
-BASELINE_SETTLE_SECONDS = 2.0      # let process settle before sampling baseline
+CPU_SAMPLE_SECONDS = 1.0  # psutil.cpu_percent() blocking interval
+BASELINE_SETTLE_SECONDS = 2.0  # let process settle before sampling baseline
 
-S3_RESCAN_EVERY_N_POLLS = 6        # ~ every minute when idle
-FIRESTORE_BATCH_LIMIT = 500        # Firestore hard cap is 500 writes/batch
+S3_RESCAN_EVERY_N_POLLS = 6  # ~ every minute when idle
+FIRESTORE_BATCH_LIMIT = 500  # Firestore hard cap is 500 writes/batch
 SHUTDOWN_GRACE_SECONDS = 30
 
 WORKERS_DIR = BACKEND_ROOT / "workers"
@@ -89,7 +90,9 @@ def _build_logger() -> logging.Logger:
     if log.handlers:
         return log
     fmt = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
-    fh = RotatingFileHandler(LOG_PATH, maxBytes=LOG_MAX_BYTES, backupCount=LOG_BACKUP_COUNT)
+    fh = RotatingFileHandler(
+        LOG_PATH, maxBytes=LOG_MAX_BYTES, backupCount=LOG_BACKUP_COUNT
+    )
     fh.setFormatter(fmt)
     sh = logging.StreamHandler(sys.stdout)
     sh.setFormatter(fmt)
@@ -148,6 +151,7 @@ def _get_db():
         )
     import firebase_admin
     from firebase_admin import credentials, firestore as admin_firestore
+
     if not firebase_admin._apps:
         cred_path = os.getenv("FIREBASE_CREDENTIALS_PATH", "serviceAccountKey.json")
         firebase_admin.initialize_app(credentials.Certificate(cred_path))
@@ -159,6 +163,7 @@ def _get_db():
 # --------------------------------------------------------------------------- #
 def _classify(frame: np.ndarray) -> str:
     from api.media.face_detection import detect_faces
+
     count, _ = detect_faces(frame)
     if count == 1:
         return STATUS_FACE
@@ -232,19 +237,23 @@ def _list_s3_camera_keys(s3) -> list[dict]:
                 timestamp = int(parts[2])
             except ValueError:
                 continue
-            out.append({
-                "exam_id": parts[0],
-                "email": _email_from_safe(parts[1]),
-                "timestamp": timestamp,
-                "camera_key": key,
-            })
+            out.append(
+                {
+                    "exam_id": parts[0],
+                    "email": _email_from_safe(parts[1]),
+                    "timestamp": timestamp,
+                    "camera_key": key,
+                }
+            )
     return out
 
 
 def _fetch_existing_analysis(db, exam_id: str) -> dict[str, dict]:
     """Return {doc_id: doc_dict} for every analyzed frame already in Firestore for this exam."""
     out: dict[str, dict] = {}
-    coll = db.collection("exams").document(exam_id).collection(PHOTO_ANALYSIS_COLLECTION)
+    coll = (
+        db.collection("exams").document(exam_id).collection(PHOTO_ANALYSIS_COLLECTION)
+    )
     for doc in coll.stream():
         data = doc.to_dict() or {}
         if data.get("status") in TERMINAL_STATUSES:
@@ -272,28 +281,39 @@ def _bootstrap_queue(s3, db) -> list[dict]:
         try:
             existing = _fetch_existing_analysis(db, exam_id)
         except Exception as e:
-            logger.warning("BOOTSTRAP exam=%s failed to fetch existing analysis (%s); treating all as pending", exam_id, e)
+            logger.warning(
+                "BOOTSTRAP exam=%s failed to fetch existing analysis (%s); treating all as pending",
+                exam_id,
+                e,
+            )
             existing = {}
         for item in items:
             doc_id = f"{item['email']}_{item['timestamp']}"
             prior = existing.get(doc_id)
             if prior:
-                queue.append({
-                    **item,
-                    "status": prior["status"],
-                    "uploadedToFirebase": True,
-                    "analyzed_at": prior.get("analyzedAt"),
-                })
+                queue.append(
+                    {
+                        **item,
+                        "status": prior["status"],
+                        "uploadedToFirebase": True,
+                        "analyzed_at": prior.get("analyzedAt"),
+                    }
+                )
             else:
-                queue.append({
-                    **item,
-                    "status": STATUS_PENDING,
-                    "uploadedToFirebase": False,
-                    "analyzed_at": None,
-                })
-        logger.info("BOOTSTRAP exam=%s frames=%d already_analyzed=%d",
-                    exam_id, len(items), sum(1 for i in items
-                                              if f"{i['email']}_{i['timestamp']}" in existing))
+                queue.append(
+                    {
+                        **item,
+                        "status": STATUS_PENDING,
+                        "uploadedToFirebase": False,
+                        "analyzed_at": None,
+                    }
+                )
+        logger.info(
+            "BOOTSTRAP exam=%s frames=%d already_analyzed=%d",
+            exam_id,
+            len(items),
+            sum(1 for i in items if f"{i['email']}_{i['timestamp']}" in existing),
+        )
 
     logger.info(
         "BOOTSTRAP queue built: %d entries (%d pending) across %d exam(s)",
@@ -323,12 +343,14 @@ def _rescan_and_append(queue: list[dict], s3) -> int:
         key = (item["exam_id"], item["email"], item["timestamp"])
         if key in seen:
             continue
-        queue.append({
-            **item,
-            "status": STATUS_PENDING,
-            "uploadedToFirebase": False,
-            "analyzed_at": None,
-        })
+        queue.append(
+            {
+                **item,
+                "status": STATUS_PENDING,
+                "uploadedToFirebase": False,
+                "analyzed_at": None,
+            }
+        )
         added += 1
     if added:
         _atomic_write_json(QUEUE_PATH, queue)
@@ -349,37 +371,56 @@ def _analyze_one(entry: dict, s3, queue: list[dict]) -> None:
         else:
             status = _classify(frame)
     except Exception as e:
-        logger.exception("ANALYZE_ERROR exam=%s email=%s ts=%s err=%s",
-                         entry["exam_id"], entry["email"], entry["timestamp"], e)
+        logger.exception(
+            "ANALYZE_ERROR exam=%s email=%s ts=%s err=%s",
+            entry["exam_id"],
+            entry["email"],
+            entry["timestamp"],
+            e,
+        )
         return
     entry["status"] = status
     entry["analyzed_at"] = int(time.time() * 1000)
     entry["uploadedToFirebase"] = False
     _atomic_write_json(QUEUE_PATH, queue)
-    logger.info("ANALYZED exam=%s email=%s ts=%s status=%s",
-                entry["exam_id"], entry["email"], entry["timestamp"], status)
+    logger.info(
+        "ANALYZED exam=%s email=%s ts=%s status=%s",
+        entry["exam_id"],
+        entry["email"],
+        entry["timestamp"],
+        status,
+    )
 
 
 def _flush_batch(queue: list[dict], db) -> int:
-    items = [e for e in queue if e["status"] in TERMINAL_STATUSES and not e["uploadedToFirebase"]]
+    items = [
+        e
+        for e in queue
+        if e["status"] in TERMINAL_STATUSES and not e["uploadedToFirebase"]
+    ]
     if not items:
         return 0
     written = 0
     for start in range(0, len(items), FIRESTORE_BATCH_LIMIT):
-        chunk = items[start:start + FIRESTORE_BATCH_LIMIT]
+        chunk = items[start : start + FIRESTORE_BATCH_LIMIT]
         batch = db.batch()
         for item in chunk:
-            ref = (db.collection("exams")
-                     .document(item["exam_id"])
-                     .collection(PHOTO_ANALYSIS_COLLECTION)
-                     .document(f"{item['email']}_{item['timestamp']}"))
-            batch.set(ref, {
-                "exam_id": item["exam_id"],
-                "email": item["email"],
-                "timestamp": item["timestamp"],
-                "status": item["status"],
-                "analyzedAt": item["analyzed_at"] or int(time.time() * 1000),
-            })
+            ref = (
+                db.collection("exams")
+                .document(item["exam_id"])
+                .collection(PHOTO_ANALYSIS_COLLECTION)
+                .document(f"{item['email']}_{item['timestamp']}")
+            )
+            batch.set(
+                ref,
+                {
+                    "exam_id": item["exam_id"],
+                    "email": item["email"],
+                    "timestamp": item["timestamp"],
+                    "status": item["status"],
+                    "analyzedAt": item["analyzed_at"] or int(time.time() * 1000),
+                },
+            )
         batch.commit()
         for item in chunk:
             item["uploadedToFirebase"] = True
@@ -405,8 +446,13 @@ def main() -> int:
     signal.signal(signal.SIGTERM, _handle_sigterm)
     signal.signal(signal.SIGINT, _handle_sigterm)
 
-    logger.info("STARTUP pid=%d cwd=%s bucket=%s env=%s",
-                os.getpid(), os.getcwd(), S3_BUCKET, os.getenv("ENVIRONMENT", "development"))
+    logger.info(
+        "STARTUP pid=%d cwd=%s bucket=%s env=%s",
+        os.getpid(),
+        os.getcwd(),
+        S3_BUCKET,
+        os.getenv("ENVIRONMENT", "development"),
+    )
 
     s3 = _get_s3()
     db = _get_db()
@@ -427,8 +473,15 @@ def main() -> int:
                     logger.warning("RESCAN_ERROR err=%s", e)
 
             idle, cpu, mem_d, req_rate = monitor.sample()
-            logger.info("LOAD cpu=%.1f%% mem=+%.1f%% req_rate=%.2f/min idle=%s",
-                        cpu, mem_d, req_rate, idle)
+
+            if poll_count % 60 == 0:
+                logger.info(
+                    "LOAD cpu=%.1f%% mem=+%.1f%% req_rate=%.2f/min idle=%s",
+                    cpu,
+                    mem_d,
+                    req_rate,
+                    idle,
+                )
 
             if not idle:
                 _flush_batch(queue, db)
