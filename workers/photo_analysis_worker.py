@@ -46,6 +46,7 @@ import psutil  # noqa: E402
 import boto3  # noqa: E402
 from google.cloud import firestore  # noqa: E402
 from google.auth.credentials import AnonymousCredentials  # noqa: E402
+from workers.queue_io import drain_inbox  # noqa: E402
 
 # --------------------------------------------------------------------------- #
 # Tunables — all named constants, no magic numbers.
@@ -334,24 +335,47 @@ def _load_or_bootstrap_queue(s3, db) -> list[dict]:
     return queue
 
 
-def _rescan_and_append(queue: list[dict], s3) -> int:
-    """Append any newly-uploaded S3 frames that aren't already in the queue."""
+def _rescan_by_known_exams(queue: list[dict], s3) -> int:
+    """Fallback rescan: scan S3 only for exam_ids already tracked in the queue.
+
+    This is a safety net for frames uploaded while the worker was down or when
+    the API's event-driven enqueue failed.  It is NOT a full-bucket scan — it
+    issues one prefix-scoped list call per known exam_id rather than listing the
+    whole bucket.
+    """
+    exam_ids = {e["exam_id"] for e in queue}
+    if not exam_ids:
+        return 0
     seen = {(e["exam_id"], e["email"], e["timestamp"]) for e in queue}
-    discovered = _list_s3_camera_keys(s3)
     added = 0
-    for item in discovered:
-        key = (item["exam_id"], item["email"], item["timestamp"])
-        if key in seen:
-            continue
-        queue.append(
-            {
-                **item,
-                "status": STATUS_PENDING,
-                "uploadedToFirebase": False,
-                "analyzed_at": None,
-            }
-        )
-        added += 1
+    paginator = s3.get_paginator("list_objects_v2")
+    for exam_id in exam_ids:
+        for page in paginator.paginate(Bucket=S3_BUCKET, Prefix=f"{exam_id}/"):
+            for obj in page.get("Contents", []):
+                key = obj["Key"]
+                parts = key.split("/")
+                if len(parts) != 4 or parts[-1] != "camera.png":
+                    continue
+                try:
+                    timestamp = int(parts[2])
+                except ValueError:
+                    continue
+                item_key = (parts[0], _email_from_safe(parts[1]), timestamp)
+                if item_key in seen:
+                    continue
+                queue.append(
+                    {
+                        "exam_id": parts[0],
+                        "email": _email_from_safe(parts[1]),
+                        "timestamp": timestamp,
+                        "camera_key": key,
+                        "status": STATUS_PENDING,
+                        "uploadedToFirebase": False,
+                        "analyzed_at": None,
+                    }
+                )
+                seen.add(item_key)
+                added += 1
     if added:
         _atomic_write_json(QUEUE_PATH, queue)
         logger.info("RESCAN added %d new pending entries", added)
@@ -361,7 +385,12 @@ def _rescan_and_append(queue: list[dict], s3) -> int:
 # --------------------------------------------------------------------------- #
 # Analysis + batch flush
 # --------------------------------------------------------------------------- #
-def _analyze_one(entry: dict, s3, queue: list[dict]) -> None:
+def _analyze_one(entry: dict, s3) -> None:
+    """Classify one frame and update the entry in-memory.
+
+    The queue is NOT written here; the caller writes it once after the full
+    batch completes (issue #95: avoid rewriting queue per item).
+    """
     try:
         resp = s3.get_object(Bucket=S3_BUCKET, Key=entry["camera_key"])
         body = resp["Body"].read()
@@ -382,7 +411,6 @@ def _analyze_one(entry: dict, s3, queue: list[dict]) -> None:
     entry["status"] = status
     entry["analyzed_at"] = int(time.time() * 1000)
     entry["uploadedToFirebase"] = False
-    _atomic_write_json(QUEUE_PATH, queue)
     logger.info(
         "ANALYZED exam=%s email=%s ts=%s status=%s",
         entry["exam_id"],
@@ -466,9 +494,15 @@ def main() -> int:
         try:
             poll_count += 1
 
+            # Primary path: drain frames enqueued by the API on upload.
+            added = drain_inbox(queue)
+            if added:
+                logger.info("INBOX_DRAIN added=%d", added)
+
+            # Fallback: prefix-scoped rescan for frames missed by the event path.
             if poll_count % S3_RESCAN_EVERY_N_POLLS == 0:
                 try:
-                    _rescan_and_append(queue, s3)
+                    _rescan_by_known_exams(queue, s3)
                 except Exception as e:
                     logger.warning("RESCAN_ERROR err=%s", e)
 
@@ -505,10 +539,13 @@ def main() -> int:
                 if not idle_now:
                     stop_reason = "busy"
                     break
-                _analyze_one(entry, s3, queue)
+                _analyze_one(entry, s3)
                 processed += 1
             logger.info("ANALYZE_STOP reason=%s processed=%d", stop_reason, processed)
 
+            # Write queue once per batch, not once per analyzed item (issue #95).
+            if processed:
+                _atomic_write_json(QUEUE_PATH, queue)
             _flush_batch(queue, db)
             time.sleep(POLL_INTERVAL_SECONDS)
 

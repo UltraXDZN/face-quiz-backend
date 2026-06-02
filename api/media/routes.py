@@ -12,8 +12,10 @@ try:
 except ModuleNotFoundError:
     detect_faces = None  # dev stub, face detection unavailable
 
-# Photo-analysis runs as a separate worker process that discovers new
-# camera frames via S3 scan; no per-upload enqueue call needed here.
+try:
+    from workers.queue_io import enqueue as _enqueue_capture
+except Exception:
+    _enqueue_capture = None  # worker package unavailable in this environment
 
 # Load config from environment
 AWS_ACCESS_KEY = os.getenv("AWS_ACCESS_KEY_ID")
@@ -57,6 +59,10 @@ async def upload_capture(screenshot_file: UploadFile = File(...),
 
         s3_client.put_object(Bucket=BUCKET_NAME, Key=screenshot_key, Body=screenshot, ContentType=(screenshot_file.content_type or "image/png"))
         s3_client.put_object(Bucket=BUCKET_NAME, Key=camera_key, Body=camera, ContentType=(camera_file.content_type or "image/png"))
+
+        # Enqueue the new frame for the photo-analysis worker (event-driven).
+        if _enqueue_capture is not None:
+            _enqueue_capture(exam_id, email, timestamp, camera_key)
 
         return {"message": "Upload successful", "timestamp": timestamp}
     except HTTPException:
