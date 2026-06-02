@@ -1,5 +1,6 @@
 import os
 from fastapi import APIRouter, HTTPException, status, Query
+from api.shuffle_utils import shuffle_with_seed
 from fastapi.responses import JSONResponse, StreamingResponse
 from google.cloud import firestore
 from google.auth.credentials import AnonymousCredentials
@@ -202,13 +203,9 @@ async def get_exam_full(exam_id: str, email: str = Query(default="")):
         num_tasks_displayed = exam_data.get("numberOfDisplayedTasks")
         
         # Prepare groups (shuffle if enabled)
-        prepared_groups = raw_groups
+        prepared_groups = list(raw_groups)
         if shuffle_groups and email:
-            import random
-            seed = hash(email + exam_id) % (2**32)
-            rng = random.Random(seed)
-            prepared_groups = list(raw_groups)
-            rng.shuffle(prepared_groups)
+            prepared_groups = shuffle_with_seed(prepared_groups, email, exam_id)
             if num_displayed is not None:
                 try:
                     num_int = int(num_displayed)
@@ -216,20 +213,15 @@ async def get_exam_full(exam_id: str, email: str = Query(default="")):
                         prepared_groups = prepared_groups[:num_int]
                 except (TypeError, ValueError):
                     pass
-        
+
         # Strip out the 'state' field from all tasks
         groups_without_answers = []
         for group in prepared_groups:
             raw_tasks = group.get("tasks", [])
-            
+
             # Shuffle tasks within group if enabled (independent of group shuffle)
             if shuffle_tasks and email:
-                import random
-                seed = hash(email + exam_id + group.get("id", "")) % (2**32)
-                rng = random.Random(seed)
-                tasks_list = list(raw_tasks)
-                rng.shuffle(tasks_list)
-                raw_tasks = tasks_list
+                raw_tasks = shuffle_with_seed(list(raw_tasks), email, exam_id, group.get("id", ""))
             
             # Limit tasks per group if specified
             if num_tasks_displayed is not None:
