@@ -114,7 +114,10 @@ async def lifespan(app: FastAPI):
         print("👁 Photo analysis worker stopped")
 
 
-app = FastAPI(title="Face Quiz Backend", version="1.0.0", root_path="/api", lifespan=lifespan)
+_VERSION_FILE = Path(__file__).resolve().parent.parent / "VERSION"
+APP_VERSION = _VERSION_FILE.read_text().strip() if _VERSION_FILE.exists() else "0.0.0"
+
+app = FastAPI(title="Face Quiz Backend", version=APP_VERSION, root_path="/api", lifespan=lifespan)
 
 # CORS
 allowed_origins = [os.environ.get("FRONTEND_URL", "http://localhost:3000")]
@@ -144,3 +147,8 @@ app.include_router(proctoring_router)
 @app.get("/")
 async def root():
     return {"message": "This is Face Quiz Backend!"}
+
+
+@app.get("/version")
+async def version():
+    return {"version": APP_VERSION}
