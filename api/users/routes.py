@@ -35,7 +35,7 @@ def get_db():
 
 
 @router.get("/", response_model=List[User])
-async def get_all_users():
+def get_all_users():
     """Get all users"""
     try:
         db = get_db()
@@ -47,7 +47,7 @@ async def get_all_users():
 
 
 @router.get("/by-uid/{google_uid}", response_model=User)
-async def get_user_by_uid(google_uid: str, authorization: Optional[str] = Header(None)):
+def get_user_by_uid(google_uid: str, authorization: Optional[str] = Header(None)):
     """Look up user by Google UID (from JWT). Requires valid JWT."""
     _verify_jwt(authorization)
     try:
@@ -63,7 +63,7 @@ async def get_user_by_uid(google_uid: str, authorization: Optional[str] = Header
 
 
 @router.get("/check-username/{username}")
-async def check_username(username: str):
+def check_username(username: str):
     """Check if a username is available. Public endpoint."""
     try:
         db = get_db()
@@ -74,7 +74,7 @@ async def check_username(username: str):
 
 
 @router.get("/{email}", response_model=User)
-async def get_user(email: str):
+def get_user(email: str):
     """Get user by email"""
     try:
         db = get_db()
@@ -109,7 +109,7 @@ async def get_user(email: str):
 
 
 @router.post("/", response_model=User, status_code=status.HTTP_201_CREATED)
-async def create_user(user: UserCreate, authorization: Optional[str] = Header(None)):
+def create_user(user: UserCreate, authorization: Optional[str] = Header(None)):
     """Create a new user. Requires valid JWT."""
     decoded = _verify_jwt(authorization)
     google_uid = decoded.get("google_id") or user.google_uid
@@ -139,7 +139,7 @@ async def create_user(user: UserCreate, authorization: Optional[str] = Header(No
 
 
 @router.patch("/{email}", response_model=User)
-async def update_user(email: str, user_update: UserUpdate):
+def update_user(email: str, user_update: UserUpdate):
     """Update user information"""
     try:
         db = get_db()
@@ -165,7 +165,7 @@ async def update_user(email: str, user_update: UserUpdate):
         # If photoURL was updated, update leaderboard entry
         if user_update.photoURL is not None:
             try:
-                await update_user_leaderboard_entry(email)
+                update_user_leaderboard_entry(email)
             except Exception as e:
                 print(f"Failed to update leaderboard for user {email}: {e}")
         
@@ -177,7 +177,7 @@ async def update_user(email: str, user_update: UserUpdate):
 
 
 @router.delete("/{email}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_user(email: str):
+def delete_user(email: str):
     """Delete a user and remove them from created-users tracking"""
     try:
         db = get_db()
@@ -212,7 +212,7 @@ async def delete_user(email: str):
 
 
 @router.put("/{email}", response_model=User)
-async def full_update_user(email: str, user_data: User):
+def full_update_user(email: str, user_data: User):
     """Full replacement of a user document (equivalent to Firestore setDoc)"""
     try:
         db = get_db()
@@ -239,7 +239,7 @@ async def full_update_user(email: str, user_data: User):
 
 
 @router.put("/{email}/ui-settings")
-async def update_user_ui_settings(email: str, ui_settings: UserUISettings):
+def update_user_ui_settings(email: str, ui_settings: UserUISettings):
     """Update user UI settings"""
     try:
         db = get_db()
@@ -267,7 +267,7 @@ async def update_user_ui_settings(email: str, ui_settings: UserUISettings):
 
 
 @router.get("/{email}/exams", response_model=List[dict])
-async def get_user_exams(email: str):
+def get_user_exams(email: str):
     """Get user's accessed exams"""
     try:
         db = get_db()
@@ -292,7 +292,7 @@ async def get_user_exams(email: str):
 
 
 @router.put("/{email}/exams")
-async def update_user_accessed_exam(email: str, accessed_exam: dict, old_exam_id: str = None):
+def update_user_accessed_exam(email: str, accessed_exam: dict, old_exam_id: str = None):
     """Add or update an accessed exam for a user"""
     try:
         db = get_db()
@@ -324,7 +324,7 @@ async def update_user_accessed_exam(email: str, accessed_exam: dict, old_exam_id
         
         # Automatically update leaderboard if exam is finished
         if accessed_exam.get("status") == "ZAVRŠEN":
-            await update_user_leaderboard_entry(user_doc_ref.id)
+            update_user_leaderboard_entry(user_doc_ref.id)
         
         return {"message": "Accessed exam updated successfully", "acessedExams": accessed_exams}
     except HTTPException:
@@ -334,7 +334,7 @@ async def update_user_accessed_exam(email: str, accessed_exam: dict, old_exam_id
 
 
 @router.delete("/{email}/exams/{exam_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_user_accessed_exam(email: str, exam_id: str):
+def delete_user_accessed_exam(email: str, exam_id: str):
     """Remove an accessed exam from a user"""
     try:
         db = get_db()
@@ -368,7 +368,7 @@ async def delete_user_accessed_exam(email: str, exam_id: str):
 
 
 @router.get("/tracking/created-users")
-async def get_created_users_tracking():
+def get_created_users_tracking():
     """Get created users tracking data"""
     try:
         db = get_db()
@@ -383,7 +383,7 @@ async def get_created_users_tracking():
 
 
 @router.put("/tracking/created-users/{email}")
-async def update_created_user_tracking(email: str, version: int = 0):
+def update_created_user_tracking(email: str, version: int = 0):
     """Update created user tracking version"""
     try:
         db = get_db()
