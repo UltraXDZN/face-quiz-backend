@@ -1,9 +1,10 @@
 import os
+import random
 from fastapi import APIRouter, HTTPException, status
 from google.cloud import firestore
 from google.auth.credentials import AnonymousCredentials
 from models.solutions import (
-    Solution, SolutionSubmission, UserSolutionResponse, 
+    Solution, SolutionSubmission, UserSolutionResponse,
     ExamInfo, Task, Group, ExamResultResponse, TaskResult, GroupResult
 )
 from typing import List, Dict
@@ -13,6 +14,54 @@ router = APIRouter(prefix="/solutions", tags=["solutions"])
 
 # In-memory cache for exam results: {exam_id: {password: [ExamResultResponse]}}
 results_cache: Dict[str, Dict[str, List[ExamResultResponse]]] = defaultdict(dict)
+
+
+def _get_assigned_tasks(exam_data: dict, email: str) -> list[dict]:
+    """Return only the tasks actually assigned to this student.
+
+    Mirrors the slice logic in api/exams/routes.get_exam_full so the scoring
+    denominator matches what the student was shown, not the full raw task list.
+
+    When shuffleQuestions/shuffleTasks and numberOfDisplayed* are set, a student
+    may receive fewer groups/tasks than the exam contains in Firestore. Scoring
+    all tasks inflates the denominator (e.g. solved/34 instead of solved/25).
+    """
+    raw_groups = exam_data.get("groups", [])
+    shuffle_groups = exam_data.get("shuffleQuestions", False)
+    shuffle_tasks = exam_data.get("shuffleTasks", False)
+    num_displayed_groups = exam_data.get("numberOfDisplayedQuestions")
+    num_displayed_tasks = exam_data.get("numberOfDisplayedTasks")
+    exam_id = exam_data.get("id", "")
+
+    prepared_groups = list(raw_groups)
+    if shuffle_groups and email:
+        seed = hash(email + exam_id) % (2 ** 32)
+        rng = random.Random(seed)
+        rng.shuffle(prepared_groups)
+        if num_displayed_groups is not None:
+            try:
+                n = int(num_displayed_groups)
+                if n > 0:
+                    prepared_groups = prepared_groups[:n]
+            except (TypeError, ValueError):
+                pass
+
+    assigned: list[dict] = []
+    for group in prepared_groups:
+        tasks = list(group.get("tasks", []))
+        if shuffle_tasks and email:
+            seed = hash(email + exam_id + group.get("id", "")) % (2 ** 32)
+            rng = random.Random(seed)
+            rng.shuffle(tasks)
+        if num_displayed_tasks is not None:
+            try:
+                n = int(num_displayed_tasks)
+                if n > 0:
+                    tasks = tasks[:n]
+            except (TypeError, ValueError):
+                pass
+        assigned.extend(tasks)
+    return assigned
 
 
 def get_db():
@@ -103,22 +152,20 @@ async def get_users_with_scores(exam_id: str, password: str):
         solutions_ref = db.collection("solutions").document(exam_id).collection(password).stream()
         solutions_list = list(solutions_ref)
 
-        # Flatten exam tasks and precompute the total points denominator once.
-        flat_tasks = [task for group in exam_data.get("groups", []) for task in group.get("tasks", [])]
-        total_points = sum(task.get("positive_points", 1.0) for task in flat_tasks)
-
         users_with_scores = []
 
         for solution_doc in solutions_list:
             email = solution_doc.id
             user_solutions = solution_doc.to_dict().get("solutions", [])
 
-            # Points-based score: must mirror _calculate_user_results so the percent
-            # field stays consistent with everything else in the app
-            # (admin Rezultati list, exam result page, CSV export).
+            # Score over only the tasks assigned to this student (respects
+            # numberOfDisplayedTasks/Groups and shuffle/slice logic).
+            assigned_tasks = _get_assigned_tasks(exam_data, email)
+            total_points = sum(t.get("positive_points", 1.0) for t in assigned_tasks)
+
             solution_map = {sol["id"]: sol.get("state") for sol in user_solutions if "id" in sol}
             achieved_points = 0.0
-            for task in flat_tasks:
+            for task in assigned_tasks:
                 user_answer = solution_map.get(task.get("id"))
                 if user_answer is None:
                     continue
@@ -249,8 +296,13 @@ def _calculate_user_results(exam_id: str, password: str, email: str, exam_data: 
     """Helper function to calculate results for a single user"""
     # Create a map of user solutions for quick lookup
     solution_map = {sol["id"]: sol.get("state") for sol in user_solutions}
-    
-    # Calculate results for each task
+
+    # Build per-group structure using only the tasks assigned to this student.
+    # _get_assigned_tasks applies the same shuffle/slice logic as get_exam_full
+    # so the denominator matches what the student actually saw.
+    assigned_tasks_flat = _get_assigned_tasks(exam_data, email)
+    assigned_ids = {t.get("id") for t in assigned_tasks_flat}
+
     group_results = []
     total_points = 0.0
     achieved_points = 0.0
@@ -258,11 +310,14 @@ def _calculate_user_results(exam_id: str, password: str, email: str, exam_data: 
     incorrect_count = 0
     unanswered_count = 0
     total_tasks = 0
-    
+
     for group in exam_data.get("groups", []):
         task_results = []
-        
+
         for task in group.get("tasks", []):
+            # Skip tasks that were not assigned to this student
+            if task.get("id") not in assigned_ids:
+                continue
             task_id = task.get("id")
             correct_answer = task.get("state")
             user_answer = solution_map.get(task_id)
