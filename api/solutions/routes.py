@@ -16,15 +16,10 @@ router = APIRouter(prefix="/solutions", tags=["solutions"])
 results_cache: Dict[str, Dict[str, List[ExamResultResponse]]] = defaultdict(dict)
 
 
-def _get_assigned_tasks(exam_data: dict, email: str) -> list[dict]:
-    """Return only the tasks actually assigned to this student.
+def _get_assigned_groups(exam_data: dict, email: str) -> list[dict]:
+    """Return groups with tasks in the exact per-student order (shuffled + sliced).
 
-    Mirrors the slice logic in api/exams/routes.get_exam_full so the scoring
-    denominator matches what the student was shown, not the full raw task list.
-
-    When shuffleQuestions/shuffleTasks and numberOfDisplayed* are set, a student
-    may receive fewer groups/tasks than the exam contains in Firestore. Scoring
-    all tasks inflates the denominator (e.g. solved/34 instead of solved/25).
+    Mirrors get_exam_full so the display order in results matches what the student saw.
     """
     raw_groups = exam_data.get("groups", [])
     shuffle_groups = exam_data.get("shuffleQuestions", False)
@@ -46,7 +41,7 @@ def _get_assigned_tasks(exam_data: dict, email: str) -> list[dict]:
             except (TypeError, ValueError):
                 pass
 
-    assigned: list[dict] = []
+    result: list[dict] = []
     for group in prepared_groups:
         tasks = list(group.get("tasks", []))
         if shuffle_tasks and email:
@@ -60,7 +55,15 @@ def _get_assigned_tasks(exam_data: dict, email: str) -> list[dict]:
                     tasks = tasks[:n]
             except (TypeError, ValueError):
                 pass
-        assigned.extend(tasks)
+        result.append({**group, "tasks": tasks})
+    return result
+
+
+def _get_assigned_tasks(exam_data: dict, email: str) -> list[dict]:
+    """Return the flat list of tasks assigned to this student, in student order."""
+    assigned: list[dict] = []
+    for group in _get_assigned_groups(exam_data, email):
+        assigned.extend(group.get("tasks", []))
     return assigned
 
 
@@ -294,14 +297,7 @@ async def get_all_users_exam_results(exam_id: str, password: str):
 
 def _calculate_user_results(exam_id: str, password: str, email: str, exam_data: dict, user_solutions: list, db) -> ExamResultResponse:
     """Helper function to calculate results for a single user"""
-    # Create a map of user solutions for quick lookup
     solution_map = {sol["id"]: sol.get("state") for sol in user_solutions}
-
-    # Build per-group structure using only the tasks assigned to this student.
-    # _get_assigned_tasks applies the same shuffle/slice logic as get_exam_full
-    # so the denominator matches what the student actually saw.
-    assigned_tasks_flat = _get_assigned_tasks(exam_data, email)
-    assigned_ids = {t.get("id") for t in assigned_tasks_flat}
 
     group_results = []
     total_points = 0.0
@@ -311,13 +307,12 @@ def _calculate_user_results(exam_id: str, password: str, email: str, exam_data: 
     unanswered_count = 0
     total_tasks = 0
 
-    for group in exam_data.get("groups", []):
+    # Iterate groups and tasks in the exact per-student order so the result
+    # display matches what the student saw (shuffled groups, shuffled tasks, sliced).
+    for group in _get_assigned_groups(exam_data, email):
         task_results = []
 
         for task in group.get("tasks", []):
-            # Skip tasks that were not assigned to this student
-            if task.get("id") not in assigned_ids:
-                continue
             task_id = task.get("id")
             correct_answer = task.get("state")
             user_answer = solution_map.get(task_id)

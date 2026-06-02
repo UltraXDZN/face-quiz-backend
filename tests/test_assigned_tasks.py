@@ -1,7 +1,7 @@
-"""Tests for _get_assigned_tasks: the helper that limits scored tasks
-to what the student was actually shown (numberOfDisplayedTasks/Groups + shuffle)."""
+"""Tests for _get_assigned_tasks / _get_assigned_groups: helpers that return
+only the tasks/groups the student was actually shown, in per-student order."""
 
-from api.solutions.routes import _get_assigned_tasks
+from api.solutions.routes import _get_assigned_tasks, _get_assigned_groups
 
 
 def _make_exam(n_groups: int, tasks_per_group: int, **kwargs) -> dict:
@@ -66,3 +66,21 @@ def test_no_shuffle_no_email_still_works():
     exam = _make_exam(2, 3)
     tasks = _get_assigned_tasks(exam, "")
     assert len(tasks) == 6
+
+
+def test_assigned_groups_preserves_shuffle_order():
+    """Groups returned by _get_assigned_groups must match the shuffled task order seen by the student."""
+    exam = _make_exam(1, 5, shuffleTasks=True)
+    groups = _get_assigned_groups(exam, "alice@x")
+    flat_from_groups = [t["id"] for t in groups[0]["tasks"]]
+    flat_direct = [t["id"] for t in _get_assigned_tasks(exam, "alice@x")]
+    assert flat_from_groups == flat_direct
+
+
+def test_assigned_groups_order_differs_per_student():
+    """Two different students get different task orderings from _get_assigned_groups."""
+    exam = _make_exam(1, 8, shuffleTasks=True)
+    order_a = [t["id"] for t in _get_assigned_groups(exam, "alice@x")[0]["tasks"]]
+    order_b = [t["id"] for t in _get_assigned_groups(exam, "bob@x")[0]["tasks"]]
+    assert set(order_a) == set(order_b), "same tasks"
+    assert order_a != order_b, "different per-student order"
