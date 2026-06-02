@@ -1,5 +1,4 @@
 import os
-import random
 from fastapi import APIRouter, HTTPException, status
 from google.cloud import firestore
 from google.auth.credentials import AnonymousCredentials
@@ -16,55 +15,26 @@ router = APIRouter(prefix="/solutions", tags=["solutions"])
 results_cache: Dict[str, Dict[str, List[ExamResultResponse]]] = defaultdict(dict)
 
 
-def _get_assigned_groups(exam_data: dict, email: str) -> list[dict]:
-    """Return groups with tasks in the exact per-student order (shuffled + sliced).
+def _build_task_lookup(exam_data: dict) -> tuple[dict, dict]:
+    """Build lookup maps over all tasks in the exam (no shuffle, full pool).
 
-    Mirrors get_exam_full so the display order in results matches what the student saw.
+    Returns:
+      task_lookup   – {task_id: task_dict}  (correct answer, points, text …)
+      task_to_group – {task_id: group_dict}
+
+    Scoring and display are driven from the submitted solutions directly, so we
+    never need to re-run the shuffle algorithm (which is not stable across server
+    restarts due to Python's randomised PYTHONHASHSEED).
     """
-    raw_groups = exam_data.get("groups", [])
-    shuffle_groups = exam_data.get("shuffleQuestions", False)
-    shuffle_tasks = exam_data.get("shuffleTasks", False)
-    num_displayed_groups = exam_data.get("numberOfDisplayedQuestions")
-    num_displayed_tasks = exam_data.get("numberOfDisplayedTasks")
-    exam_id = exam_data.get("id", "")
-
-    prepared_groups = list(raw_groups)
-    if shuffle_groups and email:
-        seed = hash(email + exam_id) % (2 ** 32)
-        rng = random.Random(seed)
-        rng.shuffle(prepared_groups)
-        if num_displayed_groups is not None:
-            try:
-                n = int(num_displayed_groups)
-                if n > 0:
-                    prepared_groups = prepared_groups[:n]
-            except (TypeError, ValueError):
-                pass
-
-    result: list[dict] = []
-    for group in prepared_groups:
-        tasks = list(group.get("tasks", []))
-        if shuffle_tasks and email:
-            seed = hash(email + exam_id + group.get("id", "")) % (2 ** 32)
-            rng = random.Random(seed)
-            rng.shuffle(tasks)
-        if num_displayed_tasks is not None:
-            try:
-                n = int(num_displayed_tasks)
-                if n > 0:
-                    tasks = tasks[:n]
-            except (TypeError, ValueError):
-                pass
-        result.append({**group, "tasks": tasks})
-    return result
-
-
-def _get_assigned_tasks(exam_data: dict, email: str) -> list[dict]:
-    """Return the flat list of tasks assigned to this student, in student order."""
-    assigned: list[dict] = []
-    for group in _get_assigned_groups(exam_data, email):
-        assigned.extend(group.get("tasks", []))
-    return assigned
+    task_lookup: dict = {}
+    task_to_group: dict = {}
+    for group in exam_data.get("groups", []):
+        for task in group.get("tasks", []):
+            tid = task.get("id")
+            if tid:
+                task_lookup[tid] = task
+                task_to_group[tid] = group
+    return task_lookup, task_to_group
 
 
 def get_db():
@@ -155,21 +125,23 @@ async def get_users_with_scores(exam_id: str, password: str):
         solutions_ref = db.collection("solutions").document(exam_id).collection(password).stream()
         solutions_list = list(solutions_ref)
 
+        # Build lookup once; scoring iterates each student's submitted solutions directly.
+        task_lookup, _ = _build_task_lookup(exam_data)
+
         users_with_scores = []
 
         for solution_doc in solutions_list:
             email = solution_doc.id
             user_solutions = solution_doc.to_dict().get("solutions", [])
 
-            # Score over only the tasks assigned to this student (respects
-            # numberOfDisplayedTasks/Groups and shuffle/slice logic).
-            assigned_tasks = _get_assigned_tasks(exam_data, email)
-            total_points = sum(t.get("positive_points", 1.0) for t in assigned_tasks)
-
-            solution_map = {sol["id"]: sol.get("state") for sol in user_solutions if "id" in sol}
+            total_points = 0.0
             achieved_points = 0.0
-            for task in assigned_tasks:
-                user_answer = solution_map.get(task.get("id"))
+            for sol in user_solutions:
+                task = task_lookup.get(sol.get("id"))
+                if task is None:
+                    continue
+                total_points += task.get("positive_points", 1.0)
+                user_answer = sol.get("state")
                 if user_answer is None:
                     continue
                 if user_answer == task.get("state"):
@@ -296,8 +268,33 @@ async def get_all_users_exam_results(exam_id: str, password: str):
 
 
 def _calculate_user_results(exam_id: str, password: str, email: str, exam_data: dict, user_solutions: list, db) -> ExamResultResponse:
-    """Helper function to calculate results for a single user"""
-    solution_map = {sol["id"]: sol.get("state") for sol in user_solutions}
+    """Calculate results for a single user.
+
+    The submitted solutions are stored in the exact order the student saw the
+    tasks (getSolutions() iterates examState.value.groups which comes from
+    get_exam_full). We use that stored order as the authoritative source of
+    task ordering and assignment — no need to re-run the shuffle algorithm.
+    """
+    task_lookup, task_to_group = _build_task_lookup(exam_data)
+
+    # Walk the submitted solutions in submission order to reconstruct which
+    # groups/tasks the student was assigned, preserving their view order.
+    groups_seen: dict = {}   # group_id → {"group": group_dict, "tasks": [(task, user_answer)]}
+    groups_order: list = []  # group_ids in first-seen order
+
+    for sol in user_solutions:
+        tid = sol.get("id")
+        task = task_lookup.get(tid)
+        if task is None:
+            continue
+        group = task_to_group.get(tid)
+        if group is None:
+            continue
+        gid = group.get("id")
+        if gid not in groups_seen:
+            groups_seen[gid] = {"group": group, "tasks": []}
+            groups_order.append(gid)
+        groups_seen[gid]["tasks"].append((task, sol.get("state")))
 
     group_results = []
     total_points = 0.0
@@ -307,25 +304,23 @@ def _calculate_user_results(exam_id: str, password: str, email: str, exam_data: 
     unanswered_count = 0
     total_tasks = 0
 
-    # Iterate groups and tasks in the exact per-student order so the result
-    # display matches what the student saw (shuffled groups, shuffled tasks, sliced).
-    for group in _get_assigned_groups(exam_data, email):
+    for gid in groups_order:
+        entry = groups_seen[gid]
+        group = entry["group"]
         task_results = []
 
-        for task in group.get("tasks", []):
+        for task, user_answer in entry["tasks"]:
             task_id = task.get("id")
             correct_answer = task.get("state")
-            user_answer = solution_map.get(task_id)
             positive_points = task.get("positive_points", 1.0)
             negative_points = task.get("negative_points", 0.3)
-            
+
             total_points += positive_points
             total_tasks += 1
-            
-            # Calculate if answer is correct and points earned
+
             is_correct = user_answer == correct_answer
             points_earned = 0.0
-            
+
             if user_answer is None:
                 unanswered_count += 1
             elif is_correct:
@@ -336,8 +331,8 @@ def _calculate_user_results(exam_id: str, password: str, email: str, exam_data: 
                 points_earned = -negative_points
                 achieved_points -= negative_points
                 incorrect_count += 1
-            
-            task_result = TaskResult(
+
+            task_results.append(TaskResult(
                 id=task_id,
                 text=task.get("text", ""),
                 user_answer=user_answer,
@@ -345,15 +340,13 @@ def _calculate_user_results(exam_id: str, password: str, email: str, exam_data: 
                 is_correct=is_correct,
                 points_earned=points_earned,
                 image=task.get("image")
-            )
-            task_results.append(task_result)
-        
-        group_result = GroupResult(
+            ))
+
+        group_results.append(GroupResult(
             id=group.get("id"),
             text=group.get("text", ""),
             tasks=task_results
-        )
-        group_results.append(group_result)
+        ))
     
     # Ensure achieved_points is not negative
     achieved_points = max(0.0, achieved_points)
