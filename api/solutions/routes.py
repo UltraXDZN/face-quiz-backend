@@ -52,7 +52,7 @@ def get_db():
 
 
 @router.post("/", status_code=status.HTTP_201_CREATED)
-async def upload_solution(submission: SolutionSubmission):
+def upload_solution(submission: SolutionSubmission):
     """Upload user's exam solutions"""
     try:
         db = get_db()
@@ -109,7 +109,7 @@ async def upload_solution(submission: SolutionSubmission):
 
 
 @router.get("/{exam_id}/{password}/users", response_model=List[UserSolutionResponse])
-async def get_users_with_scores(exam_id: str, password: str):
+def get_users_with_scores(exam_id: str, password: str):
     """Get all users who solved this exam with their scores"""
     try:
         db = get_db()
@@ -185,7 +185,7 @@ async def get_users_with_scores(exam_id: str, password: str):
 
 
 @router.get("/{exam_id}/{password}/users/{email}/results", response_model=ExamResultResponse)
-async def get_user_exam_results(exam_id: str, password: str, email: str):
+def get_user_exam_results(exam_id: str, password: str, email: str):
     """Get user's exam results with correct answers and calculated score"""
     try:
         db = get_db()
@@ -215,7 +215,7 @@ async def get_user_exam_results(exam_id: str, password: str, email: str):
 
 
 @router.get("/{exam_id}/{password}/results/all", response_model=List[ExamResultResponse])
-async def get_all_users_exam_results(exam_id: str, password: str):
+def get_all_users_exam_results(exam_id: str, password: str):
     """Get exam results for ALL users at once (optimized for admin view with in-memory cache)"""
     try:
         # Check in-memory cache first
@@ -414,7 +414,7 @@ def _calculate_user_results(exam_id: str, password: str, email: str, exam_data: 
 
 
 @router.post("/{exam_id}/{password}/users/{email}")
-async def get_user_answers(exam_id: str, password: str, email: str):
+def get_user_answers(exam_id: str, password: str, email: str):
     """Get specific user's answers for an exam"""
     try:
         db = get_db()

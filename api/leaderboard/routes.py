@@ -21,7 +21,7 @@ def get_db():
 
 
 @router.get("/", response_model=LeaderboardData)
-async def get_leaderboard(tags: List[str] = Query(default=[])):
+def get_leaderboard(tags: List[str] = Query(default=[])):
     """Get the current leaderboard, optionally filtered by user tags."""
     try:
         db = get_db()
@@ -76,7 +76,7 @@ async def get_leaderboard(tags: List[str] = Query(default=[])):
 
 
 @router.post("/generate", response_model=LeaderboardData)
-async def generate_leaderboard():
+def generate_leaderboard():
     """Generate leaderboard from all users' exam data"""
     try:
         db = get_db()
@@ -112,7 +112,7 @@ async def generate_leaderboard():
 
 
 @router.put("/", response_model=LeaderboardData)
-async def update_leaderboard(request: LeaderboardUpdateRequest):
+def update_leaderboard(request: LeaderboardUpdateRequest):
     """Update a specific user's leaderboard entry"""
     try:
         db = get_db()
@@ -145,7 +145,7 @@ async def update_leaderboard(request: LeaderboardUpdateRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-async def update_user_leaderboard_entry(username: str):
+def update_user_leaderboard_entry(username: str):
     """
     Helper function to recalculate and update a user's leaderboard entry.
     Called automatically after exam completion or profile picture change.

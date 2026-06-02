@@ -33,7 +33,7 @@ def get_db():
 
 
 @router.post("/", status_code=status.HTTP_201_CREATED)
-async def create_exam(exam: Exam):
+def create_exam(exam: Exam):
     """Create a new exam"""
     try:
         db = get_db()
@@ -118,7 +118,7 @@ async def create_exam(exam: Exam):
 
 
 @router.get("/data", response_model=ExamsDataResponse)
-async def get_exams_data():
+def get_exams_data():
     """Get all exams metadata (created exams list and passwords)"""
     try:
         db = get_db()
@@ -150,7 +150,7 @@ async def get_exams_data():
 
 
 @router.get("/{exam_id}/metadata", response_model=ExamMetadata)
-async def get_exam_metadata(exam_id: str):
+def get_exam_metadata(exam_id: str):
     """Get exam metadata without questions/answers"""
     try:
         db = get_db()
@@ -185,7 +185,7 @@ async def get_exam_metadata(exam_id: str):
 
 
 @router.get("/{exam_id}/full", response_model=ExamForStudent)
-async def get_exam_full(exam_id: str, email: str = Query(default="")):
+def get_exam_full(exam_id: str, email: str = Query(default="")):
     """Get full exam with questions but WITHOUT correct answers (for started exams).
     If shuffleQuestions is enabled, groups and tasks are shuffled deterministically per student email."""
     try:
@@ -273,7 +273,7 @@ async def get_exam_full(exam_id: str, email: str = Query(default="")):
 
 
 @router.get("/{exam_id}/admin", response_model=Exam)
-async def get_exam_admin(exam_id: str):
+def get_exam_admin(exam_id: str):
     """Get complete exam with ALL data including correct answers (for admin/editing)"""
     try:
         db = get_db()
@@ -295,7 +295,7 @@ async def get_exam_admin(exam_id: str):
 
 
 @router.put("/{exam_id}")
-async def update_exam(exam_id: str, exam: Exam):
+def update_exam(exam_id: str, exam: Exam):
     """Update an existing exam"""
     try:
         db = get_db()
@@ -371,7 +371,7 @@ async def update_exam(exam_id: str, exam: Exam):
 
 
 @router.post("/{exam_id}/duplicate", status_code=status.HTTP_201_CREATED)
-async def duplicate_exam(exam_id: str):
+def duplicate_exam(exam_id: str):
     """Duplicate an existing exam with a new ID"""
     try:
         db = get_db()
@@ -431,7 +431,7 @@ async def duplicate_exam(exam_id: str):
 
 
 @router.delete("/{exam_id}")
-async def delete_exam(exam_id: str):
+def delete_exam(exam_id: str):
     """Delete an exam"""
     try:
         db = get_db()
@@ -506,7 +506,7 @@ def _build_group_markdown(group: dict) -> str:
 
 
 @router.get("/{exam_id}/export")
-async def export_exam(exam_id: str, format: str = Query(default="json")):
+def export_exam(exam_id: str, format: str = Query(default="json")):
     """Export an exam as JSON or as a zip of Markdown group files"""
     try:
         db = get_db()

@@ -17,17 +17,20 @@ import time
 from pathlib import Path
 
 import boto3
+from botocore.config import Config
 from fastapi import APIRouter, HTTPException, Query
 from google.auth.credentials import AnonymousCredentials
 from google.cloud import firestore
 
 router = APIRouter(prefix="/proctoring", tags=["proctoring"])
 
+_BOTO_CONFIG = Config(connect_timeout=3, read_timeout=10, retries={"max_attempts": 1})
 _s3 = boto3.client(
     "s3",
     aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID"),
     aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY"),
     region_name=os.getenv("AWS_REGION"),
+    config=_BOTO_CONFIG,
 )
 S3_BUCKET = os.getenv("S3_BUCKET_NAME", "face-quiz-media")
 PHOTO_ANALYSIS_COLLECTION = "photoAnalysis"
@@ -62,7 +65,7 @@ def _presigned_url(key: str) -> str | None:
 
 
 @router.get("/photo-analysis")
-async def get_photo_analysis(exam_id: str, email: str | None = Query(None)):
+def get_photo_analysis(exam_id: str, email: str | None = Query(None)):
     """Get analyzed photos for an exam, optionally filtered by student email.
 
     Returns one document per analyzed camera frame. The frontend reads this
@@ -93,7 +96,7 @@ ALLOWED_OVERRIDE_STATUSES = {"FACE_DETECTED", "MULTIPLE_FACES_DETECTED", "NO_FAC
 
 
 @router.put("/photo-analysis/{exam_id}/{doc_id}/override")
-async def override_photo_analysis(
+def override_photo_analysis(
     exam_id: str,
     doc_id: str,
     status: str = Query(..., description="One of FACE_DETECTED|MULTIPLE_FACES_DETECTED|NO_FACE_DETECTED"),
@@ -117,7 +120,7 @@ async def override_photo_analysis(
 
 
 @router.delete("/photo-analysis/{exam_id}/{doc_id}/override")
-async def clear_photo_analysis_override(exam_id: str, doc_id: str):
+def clear_photo_analysis_override(exam_id: str, doc_id: str):
     """Remove the admin override; effective status falls back to the AI prediction."""
     db = _get_db()
     ref = db.collection("exams").document(exam_id).collection(PHOTO_ANALYSIS_COLLECTION).document(doc_id)
@@ -133,7 +136,7 @@ async def clear_photo_analysis_override(exam_id: str, doc_id: str):
 
 
 @router.get("/worker-status")
-async def get_worker_status():
+def get_worker_status():
     """Snapshot of the background worker for the admin dashboard.
 
     Returns queue depth, last-batch info, request counter, and a small
