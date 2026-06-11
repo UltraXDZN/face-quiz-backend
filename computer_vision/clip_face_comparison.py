@@ -1,5 +1,4 @@
 """
-Perceptryx Anchor Mode — v7
 ============================
 
 Fix for 2 fps problem
